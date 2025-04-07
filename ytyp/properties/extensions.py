@@ -256,7 +256,8 @@ class DoorExtensionProperties(BaseExtensionProperties, PropertyGroup):
     enable_limit_angle: BoolProperty(name="Enable Limit Angle")
     starts_locked: BoolProperty(name="Starts Locked")
     can_break: BoolProperty(name="Can Break")
-    limit_angle: FloatProperty(name="Limit Angle")
+    limit_angle_pull: FloatProperty(name="Limit Angle pull")
+    limit_angle_push: FloatProperty(name="Limit Angle push")
     door_target_ratio: FloatProperty(name="Door Target Ratio", min=0)
     audio_hash: StringProperty(name="Audio Hash")
 
