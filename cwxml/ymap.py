@@ -271,7 +271,8 @@ class ExtensionDoor(Extension):
         self.enable_limit_angle = ValueProperty("enableLimitAngle", False)
         self.starts_locked = ValueProperty("startsLocked", False)
         self.can_break = ValueProperty("canBreak", False)
-        self.limit_angle = ValueProperty("limitAngle", False)
+        self.limit_angle_pull = ValueProperty("nbjubyaa_0xcfe37bdb", False)
+        self.limit_angle_push = ValueProperty("gfkrydta_0xa0cf3c8d", False)
         self.door_target_ratio = ValueProperty("doorTargetRatio")
         self.audio_hash = TextProperty("audioHash")
 
