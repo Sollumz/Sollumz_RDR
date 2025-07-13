@@ -897,6 +897,10 @@ def _update_bpy_struct_from_dict(struct: bpy_struct, values: dict, eval_strings:
         if value is None:
             continue
 
+        if key == "default_game" and "'" not in value:
+            # Fix for old sollumz_rdr_prefs.ini where the game was not written as a string literal
+            value = f"'{value.strip()}'"
+
         if eval_strings and isinstance(value, str):
             value = ast.literal_eval(value)
 
