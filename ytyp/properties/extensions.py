@@ -257,9 +257,12 @@ class DoorExtensionProperties(BaseExtensionProperties, PropertyGroup):
     enable_limit_angle: BoolProperty(name="Enable Limit Angle")
     starts_locked: BoolProperty(name="Starts Locked")
     door_target_ratio: FloatProperty(name="Door Target Ratio", min=0)
-    audio_hash: StringProperty(name="Audio Hash")
-    
     can_break: BoolProperty(name="Can Break")
+    audio_hash: StringProperty(name="Audio Hash")
+
+    # TODO: this won't work correctly, it will only add the properties of whatever current_game is set the first time this
+    # file is imported. Need to have both sets of properties registered and only show one or the other in the UI based on
+    # the game
     if current_game() == SollumzGame.GTA:
         limit_angle: FloatProperty(name="Limit Angle")
     elif current_game() == SollumzGame.RDR:

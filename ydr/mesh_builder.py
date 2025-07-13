@@ -129,7 +129,10 @@ class MeshBuilder:
             bone_name = f"UNKNOWN_BONE.{bone_index}"
 
             if game == SollumzGame.GTA:
-                if bones and bone_index < len(bones):
+                if bone_index == 99999:
+                    from .cloth_char import CLOTH_CHAR_VERTEX_GROUP_NAME
+                    bone_name = CLOTH_CHAR_VERTEX_GROUP_NAME
+                elif bones and bone_index < len(bones):
                     bone_name = bones[bone_index].name
             elif game == SollumzGame.RDR:
                 if bone_mapping:
@@ -144,7 +147,7 @@ class MeshBuilder:
                 else:
                     if bones and bone_index < len(bones):
                         bone_name = bones[bone_index].name
-            
+
             vgroup = obj.vertex_groups.get(bone_name, None)
             if vgroup:
                 return vgroup

@@ -178,6 +178,29 @@ def get_tint_sampler_node(mat: bpy.types.Material) -> Optional[bpy.types.ShaderN
 
 
 def create_tinted_shader_graph(obj: bpy.types.Object):
+    attribute_to_remove = []
+    modifiers_to_remove = []
+
+    for mod in obj.modifiers:
+        if mod.type == "NODES":
+            for mat in obj.data.materials:
+                tint_node = get_tint_sampler_node(mat)
+                if tint_node is not None:
+                    output_id = mod.node_group.interface.items_tree.get("Tint Color")
+                    if output_id:
+                        attr_name = mod[output_id.identifier + "_attribute_name"]
+                        if attr_name and attr_name in obj.data.attributes:
+                            attribute_to_remove.append(attr_name)
+
+                    modifiers_to_remove.append(mod)
+                    break
+
+    for attr_name in attribute_to_remove:
+        obj.data.attributes.remove(obj.data.attributes[attr_name])
+
+    for mod in modifiers_to_remove:
+        obj.modifiers.remove(mod)
+
     tint_mats = get_tinted_mats(obj)
 
     if not tint_mats:
@@ -191,11 +214,15 @@ def create_tinted_shader_graph(obj: bpy.types.Object):
             continue
 
         if mat.shader_properties.filename in ShaderManager.tint_colour1_shaders:
-            input_color_attr_name = "Color 2"
+            input_color_attr_name = get_color_attr_name(1)
         else:
-            input_color_attr_name = "Color 1"
+            input_color_attr_name = get_color_attr_name(0)
 
         tint_color_attr_name = f"TintColor ({palette_img.name})" if palette_img else "TintColor"
+        # Attribute creation fails with names that are too long. Truncate to max name length 64 characters, -4 so
+        # Blender still has space to append '.012' in case of duplicated names.
+        tint_color_attr_name = tint_color_attr_name[:64-4]
+
         tint_color_attr = obj.data.attributes.new(name=tint_color_attr_name, type="BYTE_COLOR", domain="CORNER")
 
         rename_tint_attr_node(mat.node_tree, name=tint_color_attr.name)
@@ -231,8 +258,9 @@ def create_tint_geom_modifier(
 
 
 def rename_tint_attr_node(node_tree: bpy.types.NodeTree, name: str):
+    assert name.startswith("TintColor"), "Tint attributes should always be prefixed with 'TintColor'"
     for node in node_tree.nodes:
-        if not isinstance(node, bpy.types.ShaderNodeAttribute) or node.attribute_name != "TintColor":
+        if not isinstance(node, bpy.types.ShaderNodeAttribute) or not node.attribute_name.startswith("TintColor"):
             continue
 
         node.attribute_name = name
@@ -598,6 +626,31 @@ def create_decal_nodes(b: ShaderBuilder, texture, decalflag):
         links.new(mult_alpha_color0a.outputs["Value"], mix.inputs["Fac"])
 
         links.new(color0_attr.outputs["Color"], bsdf.inputs["Base Color"])
+    elif decalflag == 5:  # decal_amb_only.sps
+        ambient_decal_mask_xyz = node_tree.nodes.new("ShaderNodeCombineXYZ")
+        ambient_decal_mask = node_tree.nodes["AmbientDecalMask"]
+        dot_diffuse_mask = node_tree.nodes.new("ShaderNodeVectorMath")
+        dot_diffuse_mask.operation = "DOT_PRODUCT"
+        mult_alpha_color0a = node_tree.nodes.new("ShaderNodeMath")
+        mult_alpha_color0a.operation = "MULTIPLY"
+        color0_attr = node_tree.nodes.new("ShaderNodeVertexColor")
+        invert_color = node_tree.nodes.new("ShaderNodeInvert")
+        color0_attr.layer_name = get_color_attr_name(0)
+
+        links.new(ambient_decal_mask.outputs["X"], ambient_decal_mask_xyz.inputs["X"])
+        links.new(ambient_decal_mask.outputs["Y"], ambient_decal_mask_xyz.inputs["Y"])
+        links.new(ambient_decal_mask.outputs["Z"], ambient_decal_mask_xyz.inputs["Z"])
+
+        links.new(texture.outputs["Color"], invert_color.inputs[1])
+        links.new(invert_color.outputs["Color"], dot_diffuse_mask.inputs[0])
+        links.new(ambient_decal_mask_xyz.outputs["Vector"], dot_diffuse_mask.inputs[1])
+
+        links.new(dot_diffuse_mask.outputs["Value"], mult_alpha_color0a.inputs[0])
+        links.new(color0_attr.outputs["Alpha"], mult_alpha_color0a.inputs[1])
+
+        links.new(mult_alpha_color0a.outputs["Value"], mix.inputs["Fac"])
+
+        links.new(color0_attr.outputs["Color"], bsdf.inputs["Base Color"])
 
     links.new(trans.outputs["BSDF"], mix.inputs[1])
     links.remove(bsdf.outputs["BSDF"].links[0])
@@ -615,6 +668,7 @@ def link_value_shader_parameters(b: ShaderBuilder):
     spec_im = None
     spec_fm = None
     em_m = None
+    spec_m = None
     lyr0tint = None
     lyr1tint = None
 
@@ -627,12 +681,12 @@ def link_value_shader_parameters(b: ShaderBuilder):
             spec_fm = node_tree.nodes["specularFalloffMult"]
         elif param.name == "emissiveMultiplier":
             em_m = node_tree.nodes["emissiveMultiplier"]
+        elif param.name == "specMapIntMask":
+            spec_m = node_tree.nodes["specMapIntMask"]
         elif param.name == "lyr0tint":
             lyr0tint = node_tree.nodes["lyr0tint"]
         elif param.name == "lyr1tint":
             lyr1tint = node_tree.nodes["lyr1tint"]
-
-
 
     if bmp:
         nm = try_get_node_by_cls(node_tree, bpy.types.ShaderNodeNormalMap)
@@ -647,10 +701,26 @@ def link_value_shader_parameters(b: ShaderBuilder):
             map.clamp = True
             mult = node_tree.nodes.new("ShaderNodeMath")
             mult.operation = "MULTIPLY"
-            links.new(spec.outputs[0], mult.inputs[0])
-            links.new(map.outputs[0], mult.inputs[1])
-            links.new(spec_im.outputs["X"], map.inputs[0])
-            links.new(mult.outputs[0], bsdf.inputs["Specular IOR Level"])
+            if spec_m:
+                dot_prod = node_tree.nodes.new("ShaderNodeVectorMath")
+                dot_prod.operation = "DOT_PRODUCT"
+                links.new(dot_prod.inputs[0], spec.outputs[0])
+                combine_xyz = node_tree.nodes.new("ShaderNodeCombineXYZ")
+                spec_mask = try_get_node(node_tree, "specMapIntMask")
+                links.new(spec_mask.outputs["X"], combine_xyz.inputs["X"])
+                links.new(spec_mask.outputs["Y"], combine_xyz.inputs["Y"])
+                links.new(spec_mask.outputs["Z"], combine_xyz.inputs["Z"])
+                links.new(combine_xyz.outputs[0], dot_prod.inputs[1])
+                links.new(dot_prod.outputs["Value"], mult.inputs[0])
+                links.new(map.outputs[0], mult.inputs[1])
+                links.new(spec_im.outputs["X"], map.inputs[0])
+                links.new(mult.outputs[0], bsdf.inputs["Specular IOR Level"])
+            else:
+                links.new(spec.outputs[0], mult.inputs[0])
+                links.new(map.outputs[0], mult.inputs[1])
+                links.new(spec_im.outputs["X"], map.inputs[0])
+                links.new(mult.outputs[0], bsdf.inputs["Specular IOR Level"])
+
     if spec_fm:
         map = node_tree.nodes.new("ShaderNodeMapRange")
         map.inputs[2].default_value = 512
@@ -667,7 +737,6 @@ def link_value_shader_parameters(b: ShaderBuilder):
     if lyr0tint:
         tint_mix_node0 = try_get_node(node_tree, "tint_mix_node0")
         if tint_mix_node0:
-             
             tint0_multiply = node_tree.nodes.new("ShaderNodeMath")
             tint0_multiply.name = "tint_multiply_node0"
             tint0_multiply.operation = "MULTIPLY"        

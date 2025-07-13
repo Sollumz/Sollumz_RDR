@@ -3,8 +3,11 @@ from ..sollumz_properties import SollumzGame, import_export_current_game as curr
 import bpy
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, Optional
 from mathutils import Vector
+from typing import Tuple, Optional
+from enum import Enum, auto
+
+from ..shared.geometry import tris_normals
 from ..tools.meshhelper import (
     flip_uvs,
     get_mesh_used_colors_indices,
@@ -13,20 +16,62 @@ from ..tools.meshhelper import (
     get_uv_map_name,
 )
 from ..cwxml.drawable import VertexBuffer
+from ..cwxml.cloth import CharacterCloth
+from ..cwxml.shader import ShaderManager
+from .cloth_char import (
+    CLOTH_CHAR_VERTEX_GROUP_NAME,
+    cloth_char_get_mesh_to_cloth_bindings,
+)
+from .cloth_diagnostics import (
+    ClothDiagMeshMaterialError,
+    cloth_export_context,
+)
 
 from .. import logger
 
+VGROUP_INVALID_BONE_ID = -1
+VGROUP_CLOTH_ID = -2
 
-def get_bone_index_by_vgroup(vgroups: bpy.types.VertexGroups, bones: list[bpy.types.Bone]) -> dict[int, int]:
-    """Get vertex group index to bone index mapping. If bone not found, vertex group is mapped to -1."""
+
+def try_get_bone_by_vgroup(obj: bpy.types.Object, armature_obj: bpy.types.Object | None) -> dict[int, int] | None:
+    vgroups = obj.vertex_groups
+    bones = armature_obj.data.bones if armature_obj is not None else None
+    if not vgroups or not bones:
+        return None
+
     bone_ind_by_name: dict[str, int] = {b.name: i for i, b in enumerate(bones)}
 
-    return {i: bone_ind_by_name[group.name] if group.name in bone_ind_by_name else -1 for i, group in enumerate(vgroups)}
+    bone_ind_by_vgroup: dict[int, int] = {}
+    unknown_vgroups: list[str] = []
+    for i, group in enumerate(vgroups):
+        if group.name in bone_ind_by_name:
+            bone_index = bone_ind_by_name[group.name]
+        elif group.name == CLOTH_CHAR_VERTEX_GROUP_NAME:
+            bone_index = VGROUP_CLOTH_ID
+        else:
+            unknown_vgroups.append(group.name)
+            bone_index = 0  # map unknown vertex group to root bone
+        bone_ind_by_vgroup[i] = bone_index
+
+    if unknown_vgroups:
+        unknown_vgroups_str = ", ".join(unknown_vgroups)
+        logger.warning(
+            f"Object '{obj.name}' has {len(unknown_vgroups)} unknown vertex groups! "
+            "Make sure the following vertex groups exist as bones in the armature "
+            f"'{armature_obj.name}': {unknown_vgroups_str}"
+        )
+
+    return bone_ind_by_vgroup
 
 
-def get_bone_tag_by_vgroup(vgroups: bpy.types.VertexGroups, bones: list[bpy.types.Bone]) -> dict[int, int]:
-    """Get vertex group index to bone tag mapping. If bone not found, vertex group is mapped to -1."""
+def try_get_bone_tag_by_vgroup(obj: bpy.types.Object, armature_obj: bpy.types.Object | None) -> dict[int, int] | None:
+    vgroups = obj.vertex_groups
+    bones = armature_obj.data.bones if armature_obj is not None else None
+    if not vgroups or not bones:
+        return None
+
     bone_tag_by_name: dict[str, int] = {b.name: b.bone_properties.tag for b in bones}
+    unknown_vgroups: list[str] = []
 
     def _tag_for_vgroup(group_name: str) -> int:
         if (tag := bone_tag_by_name.get(group_name, None)) is None:
@@ -36,11 +81,25 @@ def get_bone_tag_by_vgroup(vgroups: bpy.types.VertexGroups, bones: list[bpy.type
                 if tag_str.isdecimal():
                     tag = int(tag_str)
 
+            if tag == -1:
+                unknown_vgroups.append(group_name)
+                tag = 0
+
         return tag
 
-    return {
+    bone_tag_by_vgroup = {
         i: _tag_for_vgroup(group.name) for i, group in enumerate(vgroups)
     }
+
+    if unknown_vgroups:
+        unknown_vgroups_str = ", ".join(unknown_vgroups)
+        logger.warning(
+            f"Object '{obj.name}' has {len(unknown_vgroups)} unknown vertex groups! "
+            "Make sure the following vertex groups exist as bones in the armature "
+            f"'{armature_obj.name}': {unknown_vgroups_str}"
+        )
+
+    return bone_tag_by_vgroup
 
 
 def remove_arr_field(name: str, vertex_arr: NDArray):
@@ -95,19 +154,73 @@ def dedupe_and_get_indices(vertex_arr: NDArray) -> Tuple[NDArray, NDArray[np.uin
     return vertex_arr, index_arr
 
 
+def normalize_weights(weights_arr: NDArray[np.float32]) -> NDArray[np.float32]:
+    """Normalize weights such that their sum is 1."""
+    row_sums = weights_arr.sum(axis=1, keepdims=True)
+    return np.divide(weights_arr, row_sums, out=np.zeros_like(weights_arr), where=row_sums != 0)
+
+
+def get_sorted_vertex_group_elements(vertex: bpy.types.MeshVertex, bone_by_vgroup: dict) -> list[bpy.types.VertexGroupElement]:
+    elements = []
+    for element in vertex.groups:
+        bone_index = bone_by_vgroup.get(element.group, VGROUP_INVALID_BONE_ID)
+
+        # skip the group that doesn't have a corresponding bone
+        if bone_index == VGROUP_INVALID_BONE_ID:
+            continue
+
+        elements.append(element)
+
+    # sort by weight so the groups with less influence are to be ignored
+    elements = sorted(elements, reverse=True, key=lambda e: e.weight)
+    return elements
+
+
+class VBBuilderDomain(Enum):
+    FACE_CORNER = auto()
+    """Mesh is exported allowing each face corner to have their own set of attributes."""
+    VERTEX = auto()
+    """Mesh is exported only allowing a single set of attributes per vertex. If face corners attached to the vertex
+    have different attributes (vertex colors, UVs, etc.), only the attributes of one of the face corners is used. In the
+    case of normals, the average of the face corner normals is used.
+    """
+
+
 class VertexBufferBuilder:
     """Builds Geometry vertex buffers from a mesh."""
 
-    def __init__(self, mesh: bpy.types.Mesh, bone_by_vgroup: Optional[dict[int, int]] = None):
+    def __init__(
+        self,
+        mesh: bpy.types.Mesh,
+        bone_by_vgroup: Optional[dict[int, int]] = None,
+        domain: VBBuilderDomain = VBBuilderDomain.FACE_CORNER,
+        materials: Optional[list[bpy.types.Material]] = None,
+        char_cloth_xml: Optional[CharacterCloth] = None,
+        bones: Optional[list[bpy.types.Bone]] = None,
+    ):
         self.mesh = mesh
+        self.domain = domain
+        self.materials = materials
 
         self._bone_by_vgroup = bone_by_vgroup
         self._has_weights = bone_by_vgroup is not None
 
-        vert_inds = np.empty(len(mesh.loops), dtype=np.uint32)
-        self.mesh.loops.foreach_get("vertex_index", vert_inds)
+        self._loop_to_vert_inds = np.empty(len(mesh.loops), dtype=np.uint32)
+        self.mesh.loops.foreach_get("vertex_index", self._loop_to_vert_inds)
 
-        self._vert_inds = vert_inds
+        if domain == VBBuilderDomain.VERTEX:
+            self._vert_to_loops = []
+            self._vert_to_first_loop = np.empty(len(mesh.vertices), dtype=np.uint32)
+            for vert_index in range(len(mesh.vertices)):
+                loop_indices = np.where(self._loop_to_vert_inds == vert_index)[0]
+                self._vert_to_loops.append(loop_indices.tolist())
+                self._vert_to_first_loop[vert_index] = loop_indices[0]
+        else:
+            self._vert_to_loops = None
+            self._vert_to_first_loop = None
+
+        self._char_cloth = char_cloth_xml
+        self._bones = bones
 
     def build(self, game: SollumzGame = SollumzGame.GTA):
         set_import_export_current_game(game)
@@ -136,13 +249,12 @@ class VertexBufferBuilder:
             mesh_attrs["Tangent2"] = Vector((1, 0, 0, 0))
 
         if self._has_weights:
-            
             data = self._get_weights_indices()
 
             mesh_attrs["BlendWeights"] = data[0]
             if current_game() == SollumzGame.RDR:
                 mesh_attrs["BlendWeights1"] = data[2]
-            
+
             mesh_attrs["BlendIndices"] = data[1]
             if current_game() == SollumzGame.RDR:
                 mesh_attrs["BlendIndices1"] = data[3]
@@ -171,7 +283,11 @@ class VertexBufferBuilder:
                         item = tuple(item)
                         struct_dtype.append(item)
                         break
-        vertex_arr = np.empty(len(self._vert_inds), dtype=struct_dtype)
+
+        if self.domain == VBBuilderDomain.FACE_CORNER:
+            vertex_arr = np.empty(len(self.mesh.loops), dtype=struct_dtype)
+        elif self.domain == VBBuilderDomain.VERTEX:
+            vertex_arr = np.empty(len(self.mesh.vertices), dtype=struct_dtype)
 
         for attr_name, arr in mesh_attrs.items():
             vertex_arr[attr_name] = arr
@@ -181,23 +297,40 @@ class VertexBufferBuilder:
     def _get_positions(self):
         positions = np.empty(len(self.mesh.vertices) * 3, dtype=np.float32)
         self.mesh.attributes["position"].data.foreach_get("vector", positions)
-        positions = np.reshape(positions, (len(self.mesh.vertices), 3))
+        positions = positions.reshape((len(self.mesh.vertices), 3))
 
-        return positions[self._vert_inds]
+        if self.domain == VBBuilderDomain.FACE_CORNER:
+            return positions[self._loop_to_vert_inds]
+        elif self.domain == VBBuilderDomain.VERTEX:
+            return positions
 
     def _get_normals(self):
+        def _process_normals(normals):
+            if current_game() == SollumzGame.RDR:
+                processed_normal = np.zeros((normals.shape[0], 4), dtype=np.float32)
+                processed_normal[:, :3] = normals
+                condition = processed_normal[:, 2] < 0
+                processed_normal[:, 3] = np.where(condition, -1, 0)
+                return processed_normal
+            else:
+                return normals
+
         normals = np.empty(len(self.mesh.loops) * 3, dtype=np.float32)
         self.mesh.loops.foreach_get("normal", normals)
+        normals = normals.reshape((len(self.mesh.loops), 3))
 
-        if current_game() == SollumzGame.GTA:
-            return np.reshape(normals, (len(self.mesh.loops), 3))
+        if self.domain == VBBuilderDomain.FACE_CORNER:
+            return _process_normals(normals)
+        elif self.domain == VBBuilderDomain.VERTEX:
+            num_verts = len(self.mesh.vertices)
+            vertex_normals = np.empty((num_verts, 3), dtype=np.float32)
+            for vert_index in range(num_verts):
+                loops = self._vert_to_loops[vert_index]
+                avg_normal = np.average(normals[loops], axis=0)
+                avg_normal /= np.linalg.norm(avg_normal)
+                vertex_normals[vert_index] = avg_normal
 
-        elif current_game() == SollumzGame.RDR:
-            processed_normal = np.zeros((len(self.mesh.loops), 4), dtype=np.float32)
-            processed_normal[:, :3] = np.reshape(normals, (len(self.mesh.loops), 3))
-            condition = processed_normal[:, 2] < 0
-            processed_normal[:, 3] = np.where(condition, -1, 0)
-            return processed_normal
+            return _process_normals(vertex_normals)
 
     def _get_weights_indices(self) -> Tuple[NDArray[np.uint32], NDArray[np.uint32]]:
         """Get all BlendWeights and BlendIndices."""
@@ -211,12 +344,17 @@ class VertexBufferBuilder:
             ind_arr = np.zeros((num_verts, 8), dtype=np.uint32)
             weights_arr = np.zeros((num_verts, 8), dtype=np.float32)
 
+        cloth_bind_verts = []
         ungrouped_verts = 0
 
         for i, vert in enumerate(self.mesh.vertices):
             groups = self._get_sorted_vertex_group_elements(vert)
             if not groups:
                 ungrouped_verts += 1
+                continue
+
+            if any(bone_by_vgroup[g.group] == VGROUP_CLOTH_ID for g in groups):
+                cloth_bind_verts.append(i)
                 continue
 
             for j, grp in enumerate(groups):
@@ -231,19 +369,18 @@ class VertexBufferBuilder:
                     ind_arr[i][j] = grp.group
                 else:
                     break
-        
+
         if current_game() == SollumzGame.GTA:
             weights_arr = self._normalize_weights(weights_arr)
             weights_arr, ind_arr = self._sort_weights_inds(weights_arr, ind_arr)
+
+            weights_arr = self._convert_to_int_range(weights_arr)
+            weights_arr = self._renormalize_converted_weights(weights_arr)
         elif current_game() == SollumzGame.RDR:
             normalized_weights = self._normalize_weights(weights_arr)
             weights_arr, weights_arr2 = np.hsplit(normalized_weights, 2)
             ind_arr, ind_arr2 = np.hsplit(ind_arr, 2)
 
-        if current_game() == SollumzGame.GTA:
-            weights_arr = self._convert_to_int_range(weights_arr)
-            weights_arr = self._renormalize_converted_weights(weights_arr)
-        elif current_game() == SollumzGame.RDR:
             weights_arr = self._convert_to_int_range(weights_arr)
             weights_arr2 = self._convert_to_int_range(weights_arr2)
 
@@ -264,27 +401,117 @@ class VertexBufferBuilder:
                 "these vertices."
             )
 
-        # Return on loop domain
+        if current_game() == SollumzGame.GTA and cloth_bind_verts:
+            cloth_bind_verts_mask = np.zeros(num_verts, dtype=bool)
+            cloth_bind_verts_mask[cloth_bind_verts] = 1
+
+            mesh_verts_pos = np.empty(num_verts * 3, dtype=np.float32)
+            mesh_verts_normal = np.empty(num_verts * 3, dtype=np.float32)
+            self.mesh.attributes["position"].data.foreach_get("vector", mesh_verts_pos)
+            self.mesh.vertices.foreach_get("normal", mesh_verts_normal)
+            mesh_verts_pos = mesh_verts_pos.reshape((num_verts, 3))
+            mesh_verts_normal = mesh_verts_normal.reshape((num_verts, 3))
+
+            # Check materials of faces weighted to CLOTH
+            # Material indices of each triangle
+            tri_mat_indices = np.empty(len(self.mesh.loop_triangles), dtype=np.uint32)
+            self.mesh.loop_triangles.foreach_get("material_index", tri_mat_indices)
+
+            # Vertex indices of each triangle
+            tri_verts = np.empty(len(self.mesh.loop_triangles) * 3, dtype=np.uint32)
+            self.mesh.loop_triangles.foreach_get("vertices", tri_verts)
+            tri_verts = tri_verts.reshape((-1, 3))
+
+            mat_is_ped_cloth_mask = np.array([
+                ShaderManager.find_shader(m.shader_properties.filename).is_ped_cloth
+                for m in self.materials
+            ])
+
+            # Check all triangles with any vertex weighted to CLOTH
+            cloth_bind_tris_mask = cloth_bind_verts_mask[tri_verts].any(axis=1)
+            cloth_bind_tris_mat_indices = tri_mat_indices[cloth_bind_tris_mask]
+            cloth_bind_tris_mat_indices %= len(mat_is_ped_cloth_mask)
+            cloth_bind_tris_mat_not_ped_cloth_mask = ~mat_is_ped_cloth_mask[cloth_bind_tris_mat_indices]
+            if cloth_bind_tris_mat_not_ped_cloth_mask.any():
+                n = cloth_bind_tris_mat_not_ped_cloth_mask.sum()
+                logger.error(
+                    f"Mesh '{self.mesh.name}' has {n} face(s) weighted to CLOTH vertex group but using non-cloth "
+                    "material. These faces will not be skinned correctly in-game, a ped cloth material is required."
+                )
+
+                diag_materials = []
+                for tri_idx, mat_idx in enumerate(tri_mat_indices):
+                    if not cloth_bind_tris_mask[tri_idx] or mat_is_ped_cloth_mask[mat_idx]:
+                        continue
+
+                    v0, v1, v2 = mesh_verts_pos[tri_verts[tri_idx]]
+                    v0 = Vector(v0)
+                    v1 = Vector(v1)
+                    v2 = Vector(v2)
+                    diag_materials.append(ClothDiagMeshMaterialError(v0, v1, v2))
+
+                cloth_export_context().diagnostics.mesh_material_errors = diag_materials
+
+            del tri_mat_indices
+            del tri_verts
+            del mat_is_ped_cloth_mask
+            del cloth_bind_tris_mask
+            del cloth_bind_tris_mat_indices
+            del cloth_bind_tris_mat_not_ped_cloth_mask
+
+            cloth_bind_verts_pos = mesh_verts_pos.reshape((num_verts, 3))[cloth_bind_verts_mask]
+            cloth_bind_verts_normal = mesh_verts_normal.reshape((num_verts, 3))[cloth_bind_verts_mask]
+
+            skeleton_centroid = next(b for b in self._char_cloth._tmp_skeleton.bones if b.name ==
+                                     "SKEL_Spine0").translation
+
+            cloth_bind_weights_arr, cloth_bind_ind_arr, cloth_bind_errors = cloth_char_get_mesh_to_cloth_bindings(
+                self._char_cloth, cloth_bind_verts_pos, cloth_bind_verts_normal, skeleton_centroid
+            )
+            if cloth_bind_errors:
+                n = len(cloth_bind_errors)
+                logger.error(
+                    f"Failed to bind {n} {'vertex' if n == 1 else 'vertices'} from mesh '{self.mesh.name}' to cloth mesh."
+                )
+                cloth_export_context().diagnostics.mesh_binding_errors = cloth_bind_errors
+
+            weights_arr[cloth_bind_verts_mask] = self._convert_to_int_range(cloth_bind_weights_arr)
+            ind_arr[cloth_bind_verts_mask] = cloth_bind_ind_arr
+
+            # Bindings overlay is disabled for now
+            # if not cloth_bind_errors:
+            #     diag_bindings = []
+            #     for i in range(len(ind_arr)):
+            #         if cloth_bind_verts_mask[i]:
+            #             co = Vector(self.mesh.vertices[i].co)
+            #             i1, i0, _, i2 = ind_arr[i]
+            #             v0 = Vector(self._char_cloth.controller.vertices[i0])
+            #             v1 = Vector(self._char_cloth.controller.vertices[i1])
+            #             v2 = Vector(self._char_cloth.controller.vertices[i2])
+            #             n = Vector(tris_normals(np.array([[v0, v1, v2]]))[0])
+            #             n.normalize()
+            #             diag_bindings.append(ClothCharDiagMeshBinding(co, v0, v1, v2, n))
+            #
+            #     cloth_export_context().diagnostics.mesh_bindings = diag_bindings
+
         if current_game() == SollumzGame.GTA:
-            return [weights_arr[self._vert_inds], ind_arr[self._vert_inds]]
+            if self.domain == VBBuilderDomain.FACE_CORNER:
+                # Return on loop domain
+                return weights_arr[self._loop_to_vert_inds], ind_arr[self._loop_to_vert_inds]
+            elif self.domain == VBBuilderDomain.VERTEX:
+                return weights_arr, ind_arr
         elif current_game() == SollumzGame.RDR:
-            return [weights_arr[self._vert_inds], ind_arr[self._vert_inds], weights_arr2[self._vert_inds], ind_arr2[self._vert_inds]]
+            if self.domain == VBBuilderDomain.FACE_CORNER:
+                # Return on loop domain
+                return (
+                    weights_arr[self._loop_to_vert_inds], ind_arr[self._loop_to_vert_inds],
+                    weights_arr2[self._loop_to_vert_inds], ind_arr2[self._loop_to_vert_inds],
+                )
+            elif self.domain == VBBuilderDomain.VERTEX:
+                return weights_arr, ind_arr, weights_arr2, ind_arr2
 
     def _get_sorted_vertex_group_elements(self, vertex: bpy.types.MeshVertex) -> list[bpy.types.VertexGroupElement]:
-        elements = []
-        bone_by_vgroup = self._bone_by_vgroup
-        for element in vertex.groups:
-            bone_index = bone_by_vgroup.get(element.group, -1)
-
-            # skip the group that doesn't have a corresponding bone
-            if bone_index == -1:
-                continue
-
-            elements.append(element)
-
-        # sort by weight so the groups with less influence are to be ignored
-        elements = sorted(elements, reverse=True, key=lambda e: e.weight)
-        return elements
+        return get_sorted_vertex_group_elements(vertex, self._bone_by_vgroup)
 
     def _sort_weights_inds(self, weights_arr: NDArray[np.float32], ind_arr: NDArray[np.uint32]):
         """Sort BlendWeights and BlendIndices."""
@@ -298,12 +525,6 @@ class VertexBufferBuilder:
 
         # Return with index shifted by 3
         return np.roll(weights_sorted, 3, axis=1), np.roll(ind_sorted, 3, axis=1)
-
-    def _normalize_weights(self, weights_arr: NDArray[np.float32]) -> NDArray[np.float32]:
-        """Normalize weights such that their sum is 1."""
-        row_sums = weights_arr.sum(axis=1, keepdims=True)
-        return np.divide(weights_arr, row_sums, out=np.zeros_like(
-            weights_arr), where=row_sums != 0)
 
     def _convert_to_int_range(self, arr: NDArray[np.float32]) -> NDArray[np.uint32]:
         """Convert float array from range 0-1 to range 0-255"""
@@ -340,6 +561,9 @@ class VertexBufferBuilder:
             colors = self._convert_to_int_range(colors)
             colors = np.reshape(colors, (num_loops, 4))
 
+            if self.domain == VBBuilderDomain.VERTEX:
+                colors = colors[self._vert_to_first_loop]
+
             color_layers[f"Colour{color_idx}"] = colors
 
         return color_layers
@@ -358,6 +582,9 @@ class VertexBufferBuilder:
             uvs = np.reshape(uvs, (num_loops, 2))
 
             flip_uvs(uvs)
+
+            if self.domain == VBBuilderDomain.VERTEX:
+                uvs = uvs[self._vert_to_first_loop]
 
             uv_layers[f"TexCoord{uvmap_idx}"] = uvs
 
@@ -379,9 +606,14 @@ class VertexBufferBuilder:
         mesh.loops.foreach_get("bitangent_sign", bitangent_signs)
 
         tangents = np.reshape(tangents, (num_loops, 3))
-        
         bitangent_signs = np.reshape(bitangent_signs, (-1, 1))
+
         if current_game() == SollumzGame.GTA:
-            return np.concatenate((tangents, bitangent_signs), axis=1)
+            tangents_and_sign = np.concatenate((tangents, bitangent_signs), axis=1)
         elif current_game() == SollumzGame.RDR:
-            return np.concatenate((tangents, bitangent_signs * -1), axis=1)
+            tangents_and_sign = np.concatenate((tangents, bitangent_signs * -1), axis=1)
+
+        if self.domain == VBBuilderDomain.VERTEX:
+            tangents_and_sign = tangents_and_sign[self._vert_to_first_loop]
+
+        return tangents_and_sign

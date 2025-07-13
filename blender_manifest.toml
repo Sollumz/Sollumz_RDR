@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "sollumz_rdr_dev"
-version = "2.6.1-rdrdev+$Format:%h$"
+version = "2.7.2-rdrdev+$Format:%h$"
 name = "Sollumz RDR (Development)"
 tagline = "Experimental fork with Red Dead Redemption 2 support"
 maintainer = "ultrahacx, alexguirre <alexguirre.aa@gmail.com>"

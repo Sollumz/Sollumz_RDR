@@ -12,6 +12,7 @@ from ..cwxml.bound import (
     BoundChild,
     BoundGeometryBVH,
     BoundGeometry,
+    BoundPlane,
     PolyBox,
     PolySphere,
     PolyCapsule,
@@ -29,12 +30,14 @@ from ..tools.meshhelper import (
     create_cylinder,
     create_capsule,
     create_disc,
+    create_plane,
     create_color_attr,
     get_bound_center_from_bounds,
 )
 from ..tools.utils import get_direction_of_vectors, get_distance_of_vectors, abs_vector
 from ..tools.blenderhelper import create_blender_object, create_empty_object
 from mathutils import Matrix, Vector
+from math import radians
 
 
 def import_ybn(filepath):
@@ -104,6 +107,9 @@ def create_bound_object(bound_xml: BoundChild | Bound, game: SollumzGame):
 
     if bound_xml.type == "GeometryBVH":
         return create_bvh_obj(bound_xml)
+
+    if bound_xml.type == BoundPlane.type:
+        return create_bound_plane(bound_xml)
 
 
 def create_bound_child_mesh(bound_xml: BoundChild, sollum_type: SollumType, mesh: Optional[bpy.types.Mesh] = None):
@@ -186,6 +192,14 @@ def create_bound_disc(bound_xml: BoundChild):
     obj = create_bound_child_mesh(bound_xml, SollumType.BOUND_DISC)
     create_disc(obj.data, bound_xml.sphere_radius, bound_xml.margin * 2)
     obj.location += bound_xml.box_center
+    return obj
+
+
+def create_bound_plane(bound_xml: BoundPlane):
+    obj = create_bound_child_mesh(bound_xml, SollumType.BOUND_PLANE)
+    # matrix to rotate plane so it faces towards +Y, by default faces +Z
+    create_plane(obj.data, 2.0, matrix=Matrix.Rotation(radians(90.0), 4, "X"))
+    obj.matrix_world = Matrix.LocRotScale(bound_xml.box_center, bound_xml.normal.to_track_quat("Y", "Z"), None)
     return obj
 
 
@@ -422,6 +436,7 @@ def create_poly_capsule(poly, materials, vertices):
 
     return capsule
 
+
 def create_poly_cylinder(poly, materials, vertices):
     cylinder = init_poly_obj(poly, SollumType.BOUND_POLY_CYLINDER, materials)
     if current_game() == SollumzGame.GTA:
@@ -445,6 +460,7 @@ def create_poly_cylinder(poly, materials, vertices):
     cylinder.rotation_euler = rot
 
     return cylinder
+
 
 POLY_TO_OBJ_MAP = {
     PolyBox: create_poly_box,

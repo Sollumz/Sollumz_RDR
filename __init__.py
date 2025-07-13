@@ -17,7 +17,7 @@ bl_info = {
     "author": "Skylumz, Colton and alexguirre",
     "description": "Experimental fork with Red Dead Redemption 2 support",
     "blender": (4, 0, 0),
-    "version": (2, 6, 1),
+    "version": (2, 7, 2),
     "category": "Import-Export",
     "doc_url": "https://docs.sollumz.org/",
     "tracker_url": "https://github.com/Sollumz/Sollumz-RDR/issues",

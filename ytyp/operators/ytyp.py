@@ -7,8 +7,9 @@ from bpy.props import (
 from bpy_extras.io_utils import ImportHelper
 from ...sollumz_helper import SOLLUMZ_OT_base, has_embedded_textures, has_collision
 from ...sollumz_properties import SOLLUMZ_UI_NAMES, ArchetypeType, AssetType, SollumType, SollumzGame, MapEntityType
-from ...sollumz_operators import SelectTimeFlagsRange, ClearTimeFlags
+from ...sollumz_operators import SelectTimeFlagsRangeMultiSelect, ClearTimeFlagsMultiSelect
 from ...sollumz_preferences import get_export_settings
+from ...ydr.cloth_env import cloth_env_find_mesh_objects
 from ..utils import get_selected_ytyp, get_selected_archetype
 from ..ytypimport import import_ytyp
 from ..ytypexport import selected_ytyp_to_xml
@@ -58,8 +59,9 @@ class SOLLUMZ_OT_create_archetype(SOLLUMZ_OT_base, bpy.types.Operator):
         return get_selected_ytyp(context) is not None
 
     def run(self, context):
+        archetype_type = context.scene.create_archetype_type
         selected_ytyp = get_selected_ytyp(context)
-        selected_ytyp.new_archetype()
+        selected_ytyp.new_archetype(archetype_type)
 
         return True
 
@@ -326,13 +328,10 @@ class SOLLUMZ_OT_create_archetype_from_selected(SOLLUMZ_OT_base, bpy.types.Opera
                     continue
             found = True
             selected_ytyp = get_selected_ytyp(context)
-            item = selected_ytyp.new_archetype()
-
+            item = selected_ytyp.new_archetype(archetype_type)
             item.name = obj.name
             item.asset = obj
-            item.type = archetype_type
-            item.texture_dictionary = obj.name if has_embedded_textures(
-                obj) else ""
+            item.texture_dictionary = obj.name if has_embedded_textures(obj) else ""
             drawable_dictionary = ""
             if obj.parent:
                 if obj.parent.sollum_type == SollumType.DRAWABLE_DICTIONARY:
@@ -354,6 +353,10 @@ class SOLLUMZ_OT_create_archetype_from_selected(SOLLUMZ_OT_base, bpy.types.Opera
                 item.asset_type = AssetType.ASSETLESS
             elif obj.sollum_type == SollumType.FRAGMENT:
                 item.asset_type = AssetType.FRAGMENT
+
+                if cloth_env_find_mesh_objects(obj, silent=True):
+                    item.flags.flag26 = True  # set 'Has Cloth' flag
+
         if not found:
             self.message(
                 f"No asset of type '{','.join([SOLLUMZ_UI_NAMES[type] for type in self.allowed_types])}' found!")
@@ -426,28 +429,26 @@ class SOLLUMZ_OT_delete_timecycle_modifier(SOLLUMZ_OT_base, bpy.types.Operator):
         return True
 
 
-# TODO(multiselect): ytyp_time_flags_select_range support multiselection
-class SOLLUMZ_OT_YTYP_TIME_FLAGS_select_range(SelectTimeFlagsRange, bpy.types.Operator):
+class SOLLUMZ_OT_YTYP_TIME_FLAGS_select_range(SelectTimeFlagsRangeMultiSelect, bpy.types.Operator):
     bl_idname = "sollumz.ytyp_time_flags_select_range"
 
     @classmethod
     def poll(cls, context):
         return get_selected_archetype(context) is not None
 
-    def get_flags(self, context):
-        return get_selected_archetype(context).time_flags
+    def iter_selection_flags(self, context):
+        yield from (arch.time_flags for arch in get_selected_ytyp(context).archetypes.iter_selected_items())
 
 
-# TODO(multiselect): ytyp_time_flags_clear support multiselection
-class SOLLUMZ_OT_YTYP_TIME_FLAGS_clear(ClearTimeFlags, bpy.types.Operator):
+class SOLLUMZ_OT_YTYP_TIME_FLAGS_clear(ClearTimeFlagsMultiSelect, bpy.types.Operator):
     bl_idname = "sollumz.ytyp_time_flags_clear"
 
     @classmethod
     def poll(cls, context):
         return get_selected_archetype(context) is not None
 
-    def get_flags(self, context):
-        return get_selected_archetype(context).time_flags
+    def iter_selection_flags(self, context):
+        yield from (arch.time_flags for arch in get_selected_ytyp(context).archetypes.iter_selected_items())
 
 
 class SOLLUMZ_OT_import_ytyp(SOLLUMZ_OT_base, bpy.types.Operator, ImportHelper):

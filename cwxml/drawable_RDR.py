@@ -24,17 +24,6 @@ from .element import (
     Vector4Property,
     MatrixProperty
 )
-from .bound import (
-    BoundBox,
-    BoundCapsule,
-    BoundCloth,
-    BoundComposite,
-    BoundCylinder,
-    BoundDisc,
-    BoundGeometry,
-    BoundGeometryBVH,
-    BoundSphere
-)
 from collections.abc import MutableSequence
 
 

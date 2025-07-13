@@ -1,28 +1,51 @@
 import bpy
 from bpy.types import (
+    Object,
     PropertyGroup,
 )
 from bpy.props import (
     BoolProperty,
 )
 from enum import IntEnum
-from typing import Union, Optional
+from typing import Union, Optional, Sequence
 from uuid import uuid4
+
+from ...sollumz_preferences import get_addon_preferences
 from ...tools.blenderhelper import get_children_recursive
 from ...sollumz_properties import SollumType, items_from_enums, ArchetypeType, AssetType, TimeFlagsMixin, SOLLUMZ_UI_NAMES, SollumzGame, MapEntityType
 from ...tools.utils import get_list_item
 from .mlo import EntitySetProperties, RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties
-from .flags import ArchetypeFlags, MloFlags, RoomFlags, PortalFlags, EntityFlags
+from .flags import ArchetypeFlags, MloFlags
 from .extensions import ExtensionsContainer, ExtensionType
 from ...shared.multiselection import (
     MultiSelectProperty,
     MultiSelectPointerProperty,
-    define_multiselect_access,
-    MultiSelectAccessMixin,
-    MultiSelectNestedAccessMixin,
+    MultiSelectAccess,
+    MultiSelectNestedAccess,
     define_multiselect_collection,
     MultiSelectCollection,
 )
+
+
+def _sync_select_objects_in_scene(active_obj: Object | None, selected_objs: Sequence[Object | None]):
+    view_layer = bpy.context.view_layer
+    objs = [obj for obj in selected_objs if obj and obj.name in view_layer.objects]
+    if not objs:
+        return
+
+    # Need to suppress sync selection to avoid it modifying the multiselection lists again when setting the
+    # active object. It breaks multiselection with Ctrl+click.
+    # There are multiple depsgraph updates while selecting the objects...
+    from ..selection_handler import suppress_sync_selection_context, suppress_next_sync_selection
+    with suppress_sync_selection_context():
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in objs:
+            obj.select_set(True)
+        if active_obj and active_obj.name in view_layer.objects:
+            view_layer.objects.active = active_obj
+            active_obj.select_set(True)
+    # ...and one more depsgraph update after executing this function (at least if done from the UI list callback)
+    suppress_next_sync_selection()
 
 
 class SpecialAttribute(IntEnum):
@@ -101,8 +124,7 @@ class ArchetypeTimeFlags(TimeFlagsMixin, bpy.types.PropertyGroup):
     )
 
 
-@define_multiselect_access(RoomFlags)
-class RoomFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+class RoomFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     flag1: MultiSelectProperty()
     flag2: MultiSelectProperty()
@@ -116,8 +138,7 @@ class RoomFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
     flag10: MultiSelectProperty()
 
 
-@define_multiselect_access(RoomProperties)
-class RoomSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class RoomSelectionAccess(MultiSelectAccess):
     name: MultiSelectProperty()
     bb_min: MultiSelectProperty()
     bb_max: MultiSelectProperty()
@@ -129,8 +150,7 @@ class RoomSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
     flags: MultiSelectPointerProperty(RoomFlagsSelectionAccess)
 
 
-@define_multiselect_access(PortalFlags)
-class PortalFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+class PortalFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     flag1: MultiSelectProperty()
     flag2: MultiSelectProperty()
@@ -148,8 +168,7 @@ class PortalFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
     flag14: MultiSelectProperty()
 
 
-@define_multiselect_access(PortalProperties)
-class PortalSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class PortalSelectionAccess(MultiSelectAccess):
     corner1: MultiSelectProperty()
     corner2: MultiSelectProperty()
     corner3: MultiSelectProperty()
@@ -164,8 +183,7 @@ class PortalSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
     flags: MultiSelectPointerProperty(PortalFlagsSelectionAccess)
 
 
-@define_multiselect_access(EntityFlags)
-class MloEntityFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+class MloEntityFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     flag1: MultiSelectProperty()
     flag2: MultiSelectProperty()
@@ -201,8 +219,7 @@ class MloEntityFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup)
     flag32: MultiSelectProperty()
 
 
-@define_multiselect_access(MloEntityProperties)
-class MloEntitySelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class MloEntitySelectionAccess(MultiSelectAccess):
     # from EntityProperties
     archetype_name: MultiSelectProperty()
     guid: MultiSelectProperty()
@@ -226,18 +243,17 @@ class MloEntitySelectionAccess(MultiSelectAccessMixin, PropertyGroup):
     flags: MultiSelectPointerProperty(MloEntityFlagsSelectionAccess)
 
 
-@define_multiselect_access(TimecycleModifierProperties)
-class TimecycleModifierSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class TimecycleModifierSelectionAccess(MultiSelectAccess):
     name: MultiSelectProperty()
-    sphere: MultiSelectProperty()
+    sphere_center: MultiSelectProperty()
+    sphere_radius: MultiSelectProperty()
     percentage: MultiSelectProperty()
     range: MultiSelectProperty()
     start_hour: MultiSelectProperty()
     end_hour: MultiSelectProperty()
 
 
-@define_multiselect_access(EntitySetProperties)
-class EntitySetSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class EntitySetSelectionAccess(MultiSelectAccess):
     name: MultiSelectProperty()
 
 
@@ -305,6 +321,10 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
         item.mlo_archetype_id = self.id
         item.mlo_archetype_uuid = self.uuid
 
+        preferences = get_addon_preferences(bpy.context)
+        if preferences.default_flags_portal:
+            item.flags.total = str(preferences.default_flags_portal)
+
         ArchetypeProperties.update_cached_portal_enum_items(self.uuid)
 
         return item
@@ -323,6 +343,10 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
 
         item.name = f"Room.{item.id}"
 
+        preferences = get_addon_preferences(bpy.context)
+        if preferences.default_flags_room:
+            item.flags.total = str(preferences.default_flags_room)
+
         ArchetypeProperties.update_cached_room_enum_items(self.uuid)
 
         return item
@@ -340,6 +364,10 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
         item.mlo_archetype_uuid = self.uuid
 
         item.archetype_name = f"Entity.{item_id}"
+
+        preferences = get_addon_preferences(bpy.context)
+        if preferences.default_flags_entity:
+            item.flags.total = str(preferences.default_flags_entity)
 
         return item
 
@@ -395,11 +423,12 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
         return ids[-1] + 1
 
     def select_entity_linked_object(self):
-        entity = self.entities.active_item
-        if entity.linked_object:
-            bpy.context.view_layer.objects.active = entity.linked_object
-            bpy.ops.object.select_all(action="DESELECT")
-            entity.linked_object.select_set(True)
+        if not self.id_data.sz_sync_mlo_entities_selection:
+            return
+
+        active = self.entities.active_item.linked_object
+        selected = [e.linked_object for e in self.entities.selected_items]
+        _sync_select_objects_in_scene(active, selected)
 
     def on_entities_active_index_update_from_ui(self, context):
         self.select_entity_linked_object()
@@ -528,8 +557,7 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
             del ArchetypeProperties.__entity_set_enum_items_cache[archetype_uuid]
 
 
-@define_multiselect_access(ArchetypeFlags)
-class ArchetypeFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+class ArchetypeFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     flag1: MultiSelectProperty()
     flag2: MultiSelectProperty()
@@ -565,8 +593,7 @@ class ArchetypeFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup)
     flag32: MultiSelectProperty()
 
 
-@define_multiselect_access(ArchetypeTimeFlags)
-class ArchetypeTimeFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+class ArchetypeTimeFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     hour1: MultiSelectProperty()
     hour2: MultiSelectProperty()
@@ -594,9 +621,11 @@ class ArchetypeTimeFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGr
     hour24: MultiSelectProperty()
     swap_while_visible: MultiSelectProperty()
 
+    time_flags_start: MultiSelectProperty()
+    time_flags_end: MultiSelectProperty()
 
-@define_multiselect_access(MloFlags)
-class ArchetypeMloFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGroup):
+
+class ArchetypeMloFlagsSelectionAccess(MultiSelectNestedAccess):
     total: MultiSelectProperty()
     flag1: MultiSelectProperty()
     flag2: MultiSelectProperty()
@@ -616,8 +645,7 @@ class ArchetypeMloFlagsSelectionAccess(MultiSelectNestedAccessMixin, PropertyGro
     flag16: MultiSelectProperty()
 
 
-@define_multiselect_access(ArchetypeProperties)
-class ArchetypeSelectionAccess(MultiSelectAccessMixin, PropertyGroup):
+class ArchetypeSelectionAccess(MultiSelectAccess):
     type: MultiSelectProperty()
     lod_dist: MultiSelectProperty()
     special_attribute: MultiSelectProperty()
@@ -668,7 +696,7 @@ class CMapTypesProperties(PropertyGroup):
                     entity_set.mlo_archetype_id = archetype.id
                     entity_set.mlo_archetype_uuid = archetype.uuid
 
-    def new_archetype(self):
+    def new_archetype(self, archetype_type: ArchetypeType = ArchetypeType.BASE):
         item = self.archetypes.add()
         index = len(self.archetypes) - 1
         self.archetypes.select(index)
@@ -676,17 +704,24 @@ class CMapTypesProperties(PropertyGroup):
         item.id = self.last_archetype_id + 1
         item.uuid = str(uuid4())
         item.name = f"{SOLLUMZ_UI_NAMES[ArchetypeType.BASE]}.{index + 1}"
+        item.type = archetype_type
+
+        if archetype_type != ArchetypeType.MLO:
+            preferences = get_addon_preferences(bpy.context)
+            if preferences.default_flags_archetype:
+                item.flags.total = str(preferences.default_flags_archetype)
 
         self.last_archetype_id += 1
 
         return item
 
     def select_archetype_linked_object(self):
-        archetype = self.archetypes.active_item
-        if archetype.asset:
-            bpy.context.view_layer.objects.active = archetype.asset
-            bpy.ops.object.select_all(action="DESELECT")
-            archetype.asset.select_set(True)
+        if not self.id_data.sz_sync_archetypes_selection:
+            return
+
+        active = self.archetypes.active_item.asset
+        selected = [a.asset for a in self.archetypes.selected_items]
+        _sync_select_objects_in_scene(active, selected)
 
     def on_archetypes_active_index_update_from_ui(self, context):
         self.select_archetype_linked_object()
@@ -707,10 +742,18 @@ class CMapTypesProperties(PropertyGroup):
 def register():
     bpy.types.Scene.ytyps = bpy.props.CollectionProperty(type=CMapTypesProperties, name="YTYPs")
     bpy.types.Scene.ytyp_index = bpy.props.IntProperty(name="YTYP")
-    bpy.types.Scene.show_room_gizmo = bpy.props.BoolProperty(
-        name="Show Room Gizmo", default=True)
-    bpy.types.Scene.show_portal_gizmo = bpy.props.BoolProperty(
-        name="Show Portal Gizmo", default=True)
+    bpy.types.Scene.show_room_gizmo = bpy.props.BoolProperty(name="Show Room Gizmo", default=True)
+    bpy.types.Scene.show_portal_gizmo = bpy.props.BoolProperty(name="Show Portal Gizmo", default=True)
+    bpy.types.Scene.show_mlo_tcm_gizmo = bpy.props.BoolProperty(name="Show Timecycle Modifier Gizmo", default=True)
+    sync_default = get_addon_preferences().default_sync_selection_enabled
+    bpy.types.Scene.sz_sync_archetypes_selection = BoolProperty(
+        name="Sync Selection", description="Synchronize archetypes selection with objects selection in the scene.",
+        default=sync_default
+    )
+    bpy.types.Scene.sz_sync_mlo_entities_selection = BoolProperty(
+        name="Sync Selection", description="Synchronize MLO entities selection with objects selection in the scene.",
+        default=sync_default
+    )
 
     bpy.types.Scene.create_archetype_type = bpy.props.EnumProperty(
         items=items_from_enums(ArchetypeType), name="Type")
@@ -723,5 +766,8 @@ def unregister():
     del bpy.types.Scene.ytyp_index
     del bpy.types.Scene.show_room_gizmo
     del bpy.types.Scene.show_portal_gizmo
+    del bpy.types.Scene.show_mlo_tcm_gizmo
+    del bpy.types.Scene.sz_sync_archetypes_selection
+    del bpy.types.Scene.sz_sync_mlo_entities_selection
     del bpy.types.Scene.create_archetype_type
     del bpy.types.Scene.ytyp_apply_transforms

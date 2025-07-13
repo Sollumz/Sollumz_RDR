@@ -39,7 +39,6 @@ def entities_filter_items(
 
             filter_flags[i] &= ~_BITFLAG_FILTER_ITEM
 
-
     return filter_flags, filter_order
 
 
@@ -77,12 +76,15 @@ class SOLLUMZ_PT_MLO_ENTITY_LIST_PANEL(MloChildTabPanel, bpy.types.Panel):
         layout.use_property_decorate = False
         selected_archetype = get_selected_archetype(context)
 
-        list_col, _ = multiselect_ui_draw_list(
+        list_col, side_col = multiselect_ui_draw_list(
             self.layout, selected_archetype.entities,
             "sollumz.createmloentity", "sollumz.deletemloentity",
             SOLLUMZ_UL_ENTITIES_LIST, SOLLUMZ_MT_entities_list_context_menu,
-            "tool_panel"
+            "tool_panel",
         )
+
+        side_col.separator()
+        side_col.prop(context.scene, "sz_sync_mlo_entities_selection", icon="UV_SYNC_SELECT", text="", toggle=True)
 
         filter_type = context.scene.sollumz_entity_filter_type
 
@@ -189,15 +191,15 @@ class SOLLUMZ_PT_MLO_ENTITY_PANEL(MloEntityChildTabPanel, bpy.types.Panel):
         layout.separator()
 
         row = layout.row(align=True)
-        row.prop(selection, "attached_portal_id")
+        row.prop(selection.owner, selection.propnames.attached_portal_id)
         row.operator("sollumz.search_entity_portals", text="", icon="VIEWZOOM")
 
         row = layout.row(align=True)
-        row.prop(selection, "attached_room_id")
+        row.prop(selection.owner, selection.propnames.attached_room_id)
         row.operator("sollumz.search_entity_rooms", text="", icon="VIEWZOOM")
 
         row = layout.row(align=True)
-        row.prop(selection, "attached_entity_set_id")
+        row.prop(selection.owner, selection.propnames.attached_entity_set_id)
         row.operator("sollumz.search_entityset", text="", icon="VIEWZOOM")
 
         layout.separator()
@@ -216,7 +218,8 @@ class SOLLUMZ_PT_MLO_ENTITY_PANEL(MloEntityChildTabPanel, bpy.types.Panel):
                 continue
             elif get_selected_ytyp(context).game == SollumzGame.GTA and prop_name in ["blend_age_layer", "blend_age_dirt"]:
                 continue
-            layout.prop(selection, prop_name)
+
+            layout.prop(selection.owner, getattr(selection.propnames, prop_name))
 
 
 class SOLLUMZ_UL_ENTITY_EXTENSIONS_LIST(ExtensionsListHelper, bpy.types.UIList):

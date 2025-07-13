@@ -123,7 +123,8 @@ class ExtensionUpdateFromSelectionHelper:
 
     @classmethod
     def poll(cls, context):
-        return get_selected_extension(context) is not None
+        aobj = context.active_object
+        return get_selected_extension(context) is not None and aobj and aobj.mode == "EDIT"
 
     @classmethod
     def set_extension_props(cls, context: bpy.types.Context, verts_location: Vector):
@@ -135,6 +136,10 @@ class ExtensionUpdateFromSelectionHelper:
 
         me = aobj.data
         selected_vertices = [v.co for v in me.vertices if v.select]
+        if not selected_vertices:
+            self.report({"WARNING"}, "Please select at least one vertex.")
+            return {"CANCELLED"}
+
         verts_location = sum(selected_vertices, Vector()) / len(selected_vertices)
 
         self.set_extension_props(context, verts_location)

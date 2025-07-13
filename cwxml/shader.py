@@ -229,8 +229,10 @@ class SemanticsList(ElementTree):
 
 class ShaderDefFlag(Flag):
     IS_CLOTH = auto()
+    IS_PED_CLOTH = auto()
     IS_TERRAIN = auto()
     IS_TERRAIN_MASK_ONLY = auto()
+
 
 class ShaderDefFlagProperty(ElementProperty):
     value_types = (ShaderDefFlag)
@@ -399,6 +401,10 @@ class ShaderDef(ElementTree):
     @property
     def is_cloth(self) -> bool:
         return ShaderDefFlag.IS_CLOTH in self.flags
+
+    @property
+    def is_ped_cloth(self) -> bool:
+        return ShaderDefFlag.IS_PED_CLOTH in self.flags
 
     @property
     def is_terrain(self) -> bool:

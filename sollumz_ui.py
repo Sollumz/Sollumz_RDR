@@ -224,6 +224,7 @@ class SOLLUMZ_PT_export_drawable(bpy.types.Panel, SollumzExportSettingsPanel):
     def draw_settings(self, layout: bpy.types.UILayout, settings: SollumzExportSettings):
         layout.prop(settings, "apply_transforms")
         layout.prop(settings, "export_with_ytyp")
+        layout.prop(settings, "mesh_domain", expand=True)
 
 
 class SOLLUMZ_PT_export_fragment(bpy.types.Panel, SollumzExportSettingsPanel):
@@ -534,8 +535,9 @@ class SOLLUMZ_PT_TERRAIN_PAINTER_PANEL(GeneralToolChildPanel, bpy.types.Panel):
         row = layout.row()
         row.operator("sollumz.paint_tex3")
         row.operator("sollumz.paint_tex4")
-        row = layout.row()
-        row.operator("sollumz.paint_a")
+        row = layout.row(align=True)
+        op = row.operator("sollumz.paint_a")
+        op.alpha = context.scene.vert_paint_alpha
         row.prop(context.scene, "vert_paint_alpha")
 
 

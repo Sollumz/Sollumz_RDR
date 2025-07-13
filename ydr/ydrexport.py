@@ -36,6 +36,7 @@ from ..cwxml.drawable import (
     TextureShaderParameter,
     VertexBuffer,
 )
+from ..cwxml.cloth import CharacterCloth
 from ..tools import jenkhash
 from ..tools.meshhelper import (
     get_bound_center_from_bounds,
@@ -66,9 +67,10 @@ from ..sollumz_preferences import get_export_settings
 from ..ybn.ybnexport import create_composite_xml, create_bound_xml
 from .properties import get_model_properties
 from .render_bucket import RenderBucket
-from .vertex_buffer_builder import VertexBufferBuilder, dedupe_and_get_indices, remove_arr_field, remove_unused_colors, get_bone_index_by_vgroup, get_bone_tag_by_vgroup, remove_unused_uvs
+from .vertex_buffer_builder import VertexBufferBuilder, VBBuilderDomain, dedupe_and_get_indices, remove_arr_field, remove_unused_colors, try_get_bone_by_vgroup, try_get_bone_tag_by_vgroup, remove_unused_uvs
 from .cable_vertex_buffer_builder import CableVertexBufferBuilder
 from .cable import is_cable_mesh
+from .cloth_diagnostics import cloth_export_context
 from .lights import create_xml_lights
 from ..cwxml.shader import ShaderManager, ShaderDef, ShaderParameterCBufferDef, ShaderParameterFloatVectorDef, ShaderParameterSamplerDef, ShaderParameterType
 
@@ -85,7 +87,13 @@ def export_ydr(drawable_obj: bpy.types.Object, filepath: str) -> bool:
     return True
 
 
-def create_drawable_xml(drawable_obj: bpy.types.Object, armature_obj: Optional[bpy.types.Object] = None, materials: Optional[list[bpy.types.Material]] = None, apply_transforms: bool = False):
+def create_drawable_xml(
+    drawable_obj: bpy.types.Object,
+    armature_obj: Optional[bpy.types.Object] = None,
+    materials: Optional[list[bpy.types.Material]] = None,
+    apply_transforms: bool = False,
+    char_cloth_xml: Optional[CharacterCloth] = None,
+):
     """Create a ``Drawable`` cwxml object. Optionally specify an external ``armature_obj`` if ``drawable_obj`` is not an armature."""
     set_import_export_current_game(drawable_obj.sollum_game_type)
 
@@ -124,17 +132,18 @@ def create_drawable_xml(drawable_obj: bpy.types.Object, armature_obj: Optional[b
         drawable_xml.skeleton = create_skeleton_xml(armature_obj, apply_transforms)
         drawable_xml.joints = create_joints_xml(armature_obj)
 
-        bones = armature_obj.data.bones
-
         original_pose = armature_obj.data.pose_position
         armature_obj.data.pose_position = "REST"
     else:
         drawable_xml.skeleton = None
         drawable_xml.joints = None
-        bones = None
+        armature_obj = None
         original_pose = "POSE"
 
-    create_model_xmls(drawable_xml, drawable_obj, materials, bones)
+    if char_cloth_xml:
+        char_cloth_xml._tmp_skeleton = drawable_xml.skeleton
+
+    create_model_xmls(drawable_xml, drawable_obj, materials, armature_obj, char_cloth_xml)
 
     if current_game() == SollumzGame.GTA:
         drawable_xml.lights = create_xml_lights(drawable_obj)
@@ -144,16 +153,26 @@ def create_drawable_xml(drawable_obj: bpy.types.Object, armature_obj: Optional[b
 
     create_embedded_collision_xmls(drawable_obj, drawable_xml)
 
+    if char_cloth_xml:
+        char_cloth_xml._tmp_skeleton = None
+
     if armature_obj is not None:
         armature_obj.data.pose_position = original_pose
 
     return drawable_xml
 
 
-def create_model_xmls(drawable_xml: Drawable, drawable_obj: bpy.types.Object, materials: list[bpy.types.Material], bones: Optional[list[bpy.types.Bone]] = None):
+def create_model_xmls(
+    drawable_xml: Drawable,
+    drawable_obj: bpy.types.Object,
+    materials: list[bpy.types.Material],
+    armature_obj: Optional[bpy.types.Object] = None,
+    char_cloth_xml: Optional[CharacterCloth] = None,
+):
     model_objs = get_model_objs(drawable_obj)
 
-    if bones is not None:
+    if armature_obj is not None:
+        bones = armature_obj.data.bones
         model_objs = sort_skinned_models_by_bone(model_objs, bones)
 
     for model_obj in model_objs:
@@ -168,7 +187,9 @@ def create_model_xmls(drawable_xml: Drawable, drawable_obj: bpy.types.Object, ma
             if lod.mesh is None:
                 continue
 
-            model_xml = create_model_xml(model_obj, lod_level, materials, bones, transforms_to_apply)
+            model_xml = create_model_xml(
+                model_obj, lod_level, materials, armature_obj, transforms_to_apply, char_cloth_xml
+            )
             if not model_xml.geometries:
                 continue
 
@@ -184,7 +205,8 @@ def create_model_xmls(drawable_xml: Drawable, drawable_obj: bpy.types.Object, ma
 
 def get_model_objs(drawable_obj: bpy.types.Object) -> list[bpy.types.Object]:
     """Get all non-skinned Drawable Model objects under ``drawable_obj``."""
-    return [obj for obj in drawable_obj.children if obj.sollum_type == SollumType.DRAWABLE_MODEL and not obj.sollumz_is_physics_child_mesh]
+    from .cloth import is_cloth_mesh_object
+    return [obj for obj in drawable_obj.children if obj.sollum_type == SollumType.DRAWABLE_MODEL and not obj.sollumz_is_physics_child_mesh and not is_cloth_mesh_object(obj)]
 
 
 def sort_skinned_models_by_bone(model_objs: list[bpy.types.Object], bones: list[bpy.types.Bone]):
@@ -209,12 +231,21 @@ def sort_skinned_models_by_bone(model_objs: list[bpy.types.Object], bones: list[
 
 
 @operates_on_lod_level
-def create_model_xml(model_obj: bpy.types.Object, lod_level: LODLevel, materials: list[bpy.types.Material], bones: Optional[list[bpy.types.Bone]] = None, transforms_to_apply: Optional[Matrix] = None):
+def create_model_xml(
+    model_obj: bpy.types.Object,
+    lod_level: LODLevel,
+    materials: list[bpy.types.Material],
+    armature_obj: Optional[bpy.types.Object] = None,
+    transforms_to_apply: Optional[Matrix] = None,
+    char_cloth_xml: Optional[CharacterCloth] = None,
+    mesh_domain_override: Optional[VBBuilderDomain] = None,
+):
     if current_game() == SollumzGame.GTA:
         model_xml = DrawableModel()
     elif current_game() == SollumzGame.RDR:
         model_xml = DrawableModel()
 
+    bones = armature_obj.data.bones if armature_obj is not None else None
     set_model_xml_properties(model_obj, lod_level, bones, model_xml)
 
     parent_obj = find_sollumz_parent(model_obj, SollumType.DRAWABLE_DICTIONARY)
@@ -225,13 +256,17 @@ def create_model_xml(model_obj: bpy.types.Object, lod_level: LODLevel, materials
     if transforms_to_apply is not None:
         mesh_eval.transform(transforms_to_apply)
 
+    if char_cloth_xml:
+        cloth_export_context().diagnostics.drawable_model_obj_name = model_obj.name
+
     geometries = create_geometries_xml(
-        mesh_eval, materials, bones, model_obj.vertex_groups, parent_obj)
+        model_obj, mesh_eval, materials, armature_obj, char_cloth_xml, mesh_domain_override, parent_obj
+    )
     model_xml.geometries = geometries
 
     if current_game() == SollumzGame.RDR:
         if parent_obj is not None and parent_obj.sollum_type == SollumType.DRAWABLE_DICTIONARY and bones and model_obj.vertex_groups:
-            bone_by_vgroup = get_bone_tag_by_vgroup(model_obj.vertex_groups, bones)
+            bone_by_vgroup = try_get_bone_tag_by_vgroup(model_obj.vertex_groups, bones)
             model_xml.bone_mapping = [bone_tag for bone_tag in bone_by_vgroup.values()]
         else:
             delattr(model_xml, "bone_mapping")
@@ -288,9 +323,17 @@ def set_model_xml_properties(model_obj: bpy.types.Object, lod_level: LODLevel,bo
             model_xml.flags = 1
 
 
-def create_geometries_xml(mesh_eval: bpy.types.Mesh, materials: list[bpy.types.Material], bones: Optional[list[bpy.types.Bone]] = None, vertex_groups: Optional[list[bpy.types.VertexGroup]] = None, parent_obj: Optional[bpy.types.Object] = None) -> list[Geometry]:
+def create_geometries_xml(
+    model_obj: bpy.types.Object,
+    mesh_eval: bpy.types.Mesh,
+    materials: list[bpy.types.Material],
+    armature_obj: Optional[bpy.types.Object],
+    char_cloth_xml: Optional[CharacterCloth],
+    mesh_domain_override: Optional[VBBuilderDomain],
+    parent_obj: Optional[bpy.types.Object],
+) -> list[Geometry]:
     is_cable = is_cable_mesh(mesh_eval)
-    if len(mesh_eval.loops) == 0 and not is_cable: # cable mesh don't have faces, so no loops either
+    if len(mesh_eval.loops) == 0 and not is_cable:  # cable mesh don't have faces, so no loops either
         logger.warning(f"Drawable Model '{mesh_eval.original.name}' has no Geometry! Skipping...")
         return []
 
@@ -339,7 +382,7 @@ def create_geometries_xml(mesh_eval: bpy.types.Mesh, materials: list[bpy.types.M
 
     colors_incorrect_format = [
         (c, name) for c, name in colors
-        if (attr := mesh_eval.color_attributes.get(name, None)) and \
+        if (attr := mesh_eval.color_attributes.get(name, None)) and
            (attr.domain != "CORNER" or attr.data_type != "BYTE_COLOR")
     ]
     if colors_incorrect_format:
@@ -355,22 +398,32 @@ def create_geometries_xml(mesh_eval: bpy.types.Mesh, materials: list[bpy.types.M
     del colors_missing
     del colors_incorrect_format
 
-
     loop_inds_by_mat = get_loop_inds_by_material(mesh_eval, materials)
 
     geometries: list[Geometry] = []
 
+    bones = armature_obj.data.bones if armature_obj is not None else None
     if current_game() == SollumzGame.GTA:
-        bone_by_vgroup = get_bone_index_by_vgroup(vertex_groups, bones) if bones and vertex_groups else None
+        bone_by_vgroup = try_get_bone_by_vgroup(model_obj, armature_obj)
     elif current_game() == SollumzGame.RDR:
-        bone_by_vgroup = get_bone_tag_by_vgroup(vertex_groups, bones) if bones and vertex_groups else None
+        bone_by_vgroup = try_get_bone_tag_by_vgroup(model_obj, armature_obj)
+
+    domain = VBBuilderDomain[get_export_settings().mesh_domain] if mesh_domain_override is None else mesh_domain_override
+    vb_builder = VertexBufferBuilder(mesh_eval, bone_by_vgroup, domain, materials, char_cloth_xml, bones)
+    total_vert_buffer = vb_builder.build()
+    if domain == VBBuilderDomain.VERTEX:
+        # bit dirty to use private data of the builder class, but we need this array here and it is already computed
+        loop_to_vert_inds = vb_builder._loop_to_vert_inds
 
     total_vert_buffer = VertexBufferBuilder(mesh_eval, bone_by_vgroup).build(current_game())
     for mat_index, loop_inds in loop_inds_by_mat.items():
         material = materials[mat_index]
-        vert_buffer = total_vert_buffer[loop_inds]
         tangent_required = get_tangent_required(material)
 
+        if domain == VBBuilderDomain.FACE_CORNER:
+            vert_buffer = total_vert_buffer[loop_inds]
+        elif domain == VBBuilderDomain.VERTEX:
+            vert_buffer = total_vert_buffer[loop_to_vert_inds[loop_inds]]
         used_texcoords = get_used_texcoords(material)
         used_colors = get_used_colors(material)
 
@@ -449,7 +502,6 @@ def create_geometries_xml(mesh_eval: bpy.types.Mesh, materials: list[bpy.types.M
             geom_xml.vertex_layout.formats = semantic_format
             geom_xml.vertex_layout.non_interleaved = True
 
-            
         geometries.append(geom_xml)
 
     geometries = sort_geoms_by_shader(geometries)
@@ -495,7 +547,8 @@ def get_loop_inds_by_material(mesh: bpy.types.Mesh, drawable_mats: list[bpy.type
         loop_indices = all_loop_inds[tri_loop_inds]
 
         if shader_index in loop_inds_by_mat:
-            logger.warning(f"Shader_index already in list, some geometry will be lost! This is most likely caused by a duplicate material for {mat.name} in {mesh.name}")
+            logger.warning(
+                f"Shader_index already in list, some geometry will be lost! This is most likely caused by a duplicate material for {mat.name} in {mesh.name}")
         loop_inds_by_mat[shader_index] = loop_indices
 
     return loop_inds_by_mat

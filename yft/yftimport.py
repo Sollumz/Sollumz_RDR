@@ -3,9 +3,8 @@ import bpy
 import numpy as np
 from traceback import format_exc
 from ..cwxml.fragment_RDR import RDRFragment
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Vector, Quaternion
 from typing import Optional
-
 from .fragment_merger import FragmentMerger
 from ..tools.blenderhelper import add_child_of_bone_constraint, create_empty_object, material_from_image, create_blender_object
 from ..tools.meshhelper import create_uv_attr
@@ -16,7 +15,7 @@ from ..sollumz_preferences import get_import_settings
 from ..cwxml.fragment import YFT, Fragment, PhysicsLOD, PhysicsGroup, PhysicsChild, Window, Archetype, GlassWindow
 from ..cwxml.drawable import Drawable, Bone
 from ..ydr.ydrimport import apply_translation_limits, create_armature_obj_from_skel, create_drawable_skel, apply_rotation_limits, create_joint_constraints, create_light_objs, create_drawable_obj, create_drawable_as_asset, shadergroup_to_materials, create_drawable_models
-from ..ybn.ybnimport import create_bound_object
+from ..ybn.ybnimport import create_bound_object, create_bound_composite
 from .. import logger
 from .properties import LODProperties, FragArchetypeProperties, GlassTypes, FragmentTemplateAsset
 from ..tools.blenderhelper import get_child_of_bone
@@ -45,11 +44,11 @@ def import_yft(filepath: str):
     if isinstance(yft_xml, RDRFragment):
         set_import_export_current_game(SollumzGame.RDR)
 
-    if import_settings.import_as_asset:
-        return create_drawable_as_asset(yft_xml.drawable, name, non_hi_filepath)
-
     # Import the _hi.yft.xml if it exists
     hi_xml = YFT.from_xml_file(hi_filepath) if os.path.exists(hi_filepath) else None
+
+    if import_settings.import_as_asset:
+        return create_fragment_as_asset(yft_xml, hi_xml, name, non_hi_filepath)
 
     return create_fragment_obj(yft_xml, non_hi_filepath, name,
                                split_by_group=import_settings.split_by_group, hi_xml=hi_xml)
@@ -81,12 +80,29 @@ def make_non_hi_yft_filepath(yft_filepath: str) -> str:
 
 
 def create_fragment_obj(frag_xml: Fragment, filepath: str, name: Optional[str] = None, split_by_group: bool = False, hi_xml: Optional[Fragment] = None):
-    frag_obj = create_frag_armature(frag_xml, name)
-
     if hi_xml is not None:
         frag_xml = merge_hi_fragment(frag_xml, hi_xml)
 
-    materials = shadergroup_to_materials(frag_xml.drawable.shader_group, filepath)
+    drawable_xml = frag_xml.drawable
+    if drawable_xml.is_empty and frag_xml.cloths and not frag_xml.cloths[0].drawable.is_empty:
+        # We have a fragment without a main drawable, only the cloth drawable. So shallow-copy properties we may need
+        # from the cloth drawable, except the drawable models. Creating the cloth drawable model will be handled by
+        # `create_env_cloth_meshes`
+        cloth_drawable_xml = frag_xml.cloths[0].drawable
+        drawable_xml.name = cloth_drawable_xml.name
+        drawable_xml.bounding_sphere_center = cloth_drawable_xml.bounding_sphere_center
+        drawable_xml.bounding_sphere_radius = cloth_drawable_xml.bounding_sphere_radius
+        drawable_xml.bounding_box_min = cloth_drawable_xml.bounding_box_min
+        drawable_xml.bounding_box_max = cloth_drawable_xml.bounding_box_max
+        drawable_xml.lod_dist_high = cloth_drawable_xml.lod_dist_high
+        drawable_xml.lod_dist_med = cloth_drawable_xml.lod_dist_med
+        drawable_xml.lod_dist_low = cloth_drawable_xml.lod_dist_low
+        drawable_xml.lod_dist_vlow = cloth_drawable_xml.lod_dist_vlow
+        drawable_xml.shader_group = cloth_drawable_xml.shader_group
+        drawable_xml.skeleton = cloth_drawable_xml.skeleton
+        drawable_xml.joints = cloth_drawable_xml.joints
+
+    materials = shadergroup_to_materials(drawable_xml.shader_group, filepath)
 
     if current_game() == SollumzGame.GTA:
         # Need to append [PAINT_LAYER] extension at the end of the material names
@@ -94,6 +110,8 @@ def create_fragment_obj(frag_xml: Fragment, filepath: str, name: Optional[str] =
             if "matDiffuseColor" in mat.node_tree.nodes:
                 from .properties import _update_mat_paint_name
                 _update_mat_paint_name(mat)
+
+    frag_obj = create_frag_armature(frag_xml, name)
 
     drawable_obj = create_fragment_drawable(frag_xml, frag_obj, filepath, materials, split_by_group)
     damaged_drawable_obj = create_fragment_drawable(frag_xml, frag_obj, filepath, materials, split_by_group, damaged=True)
@@ -118,6 +136,8 @@ def create_fragment_obj(frag_xml: Fragment, filepath: str, name: Optional[str] =
     create_phys_child_meshes(frag_xml, frag_obj, drawable_obj, materials)
 
     if current_game() == SollumzGame.GTA:
+        create_env_cloth_meshes(frag_xml, frag_obj, drawable_obj, materials)
+
         if frag_xml.vehicle_glass_windows:
             create_vehicle_windows(frag_xml, frag_obj, materials)
 
@@ -201,11 +221,20 @@ def set_all_bone_physics_properties(armature: bpy.types.Armature, frag_xml: Frag
 
     for group_xml in groups_xml:
         if group_xml.name not in armature.bones:
-            logger.warning(
-                f"No bone exists for the physics group {group_xml.name}! Skipping...")
-            continue
+            # Bone not found, try a case-insensitive search
+            group_name_lower = group_xml.name.lower()
+            for armature_bone in armature.bones:
+                if group_name_lower == armature_bone.name.lower():
+                    group_xml.name = armature_bone.name  # update group name to match actual bone name
+                    bone = armature_bone
+                    break
+            else:
+                # Still no bone found
+                logger.warning(f"No bone exists for the physics group {group_xml.name}! Skipping...")
+                continue
+        else:
+            bone = armature.bones[group_xml.name]
 
-        bone = armature.bones[group_xml.name]
         bone.sollumz_use_physics = True
         set_group_properties(group_xml, bone)
 
@@ -278,8 +307,6 @@ def create_phys_child_meshes(frag_xml: Fragment, frag_obj: bpy.types.Object, dra
     bone_name_by_tag: dict[str, Bone] = {
         bone.tag: bone.name for bone in bones}
 
-    child_meshes: list[bpy.types.Object] = []
-
     for child_xml in children_xml:
         if child_xml.drawable.is_empty:
             continue
@@ -293,8 +320,6 @@ def create_phys_child_meshes(frag_xml: Fragment, frag_obj: bpy.types.Object, dra
 
         create_phys_child_models(
             child_xml.drawable, frag_obj, materials, bone_name, drawable_obj)
-
-    return child_meshes
 
 
 def create_phys_child_models(drawable_xml: Drawable, frag_obj: bpy.types.Object, materials: list[bpy.types.Material], bone_name: str, drawable_obj: bpy.types.Object):
@@ -312,14 +337,152 @@ def create_phys_child_models(drawable_xml: Drawable, frag_obj: bpy.types.Object,
     return child_objs
 
 
+def create_env_cloth_meshes(frag_xml: Fragment, frag_obj: bpy.types.Object, drawable_obj: bpy.types.Object, materials: list[bpy.types.Material]):
+    if not frag_xml.cloths:
+        return
+
+    from ..cwxml.cloth import EnvironmentCloth
+    from ..ydr.cloth import ClothAttr, mesh_add_cloth_attribute
+
+    cloth: EnvironmentCloth = frag_xml.cloths[0]  # game only supports a single environment cloth per fragment
+    if cloth.drawable.is_empty:
+        return
+
+    model_objs = create_drawable_models(cloth.drawable, materials, f"{frag_obj.name}.cloth")
+    assert model_objs and len(model_objs) == 1, "Too many models in cloth drawable!"
+
+    model_obj = model_objs[0]
+    model_obj.parent = drawable_obj
+
+    bones = cloth.drawable.skeleton.bones
+    bone_index = cloth.drawable.drawable_models_high[0].bone_index
+    bone_name = bones[bone_index].name
+    add_child_of_bone_constraint(model_obj, frag_obj, bone_name)
+
+    mesh = model_obj.data
+
+    # LOD specific data
+    # TODO: handle LODs
+    pin_radius = cloth.controller.bridge.pin_radius_high
+    weights = cloth.controller.bridge.vertex_weights_high
+    inflation_scale = cloth.controller.bridge.inflation_scale_high
+    mesh_to_cloth_map = np.array(cloth.controller.bridge.display_map_high)
+    cloth_to_mesh_map = np.empty_like(mesh_to_cloth_map)
+    cloth_to_mesh_map[mesh_to_cloth_map] = np.arange(len(mesh_to_cloth_map))
+    pinned_vertices_count = cloth.controller.cloth_high.pinned_vertices_count
+    vertices_count = len(cloth.controller.cloth_high.vertex_positions)
+    force_transform = np.fromstring(cloth.user_data or "", dtype=int, sep=" ")
+    # TODO: store switch distances somewhere or maybe on export can be derived from existing LOD distances
+    # switch_distance_up = cloth.controller.cloth_high.switch_distance_up
+    # switch_distance_down = cloth.controller.cloth_high.switch_distance_down
+
+    # TODO: pin radius
+    #       There can be multiple pin radius per vertex, find a model with pin radius set
+    #       Check if pin radius is only used with character cloth
+    has_pinned = pinned_vertices_count > 0
+    has_pin_radius = len(pin_radius) > 0
+    num_pin_radius_sets = len(pin_radius) // vertices_count
+    has_weights = len(weights) > 0
+    has_inflation_scale = len(inflation_scale) > 0
+    has_force_transform = len(force_transform) > 0
+
+    if has_pinned:
+        mesh_add_cloth_attribute(mesh, ClothAttr.PINNED)
+    if has_pin_radius:
+        mesh_add_cloth_attribute(mesh, ClothAttr.PIN_RADIUS)
+        if num_pin_radius_sets > 4:
+            logger.warning(f"Found {num_pin_radius_sets} pin radius sets, only up to 4 sets are supported!")
+            num_pin_radius_sets = 4
+    if has_weights:
+        mesh_add_cloth_attribute(mesh, ClothAttr.VERTEX_WEIGHT)
+    if has_inflation_scale:
+        mesh_add_cloth_attribute(mesh, ClothAttr.INFLATION_SCALE)
+    if has_force_transform:
+        mesh_add_cloth_attribute(mesh, ClothAttr.FORCE_TRANSFORM)
+
+    for mesh_vert_index, cloth_vert_index in enumerate(mesh_to_cloth_map):
+        if has_pinned:
+            pinned = cloth_vert_index < pinned_vertices_count
+            mesh.attributes[ClothAttr.PINNED].data[mesh_vert_index].value = 1 if pinned else 0
+
+        if has_pin_radius:
+            pin_radii = [
+                pin_radius[cloth_vert_index + (set_idx * vertices_count)]
+                if set_idx < num_pin_radius_sets else 0.0
+                for set_idx in range(4)
+            ]
+            mesh.attributes[ClothAttr.PIN_RADIUS].data[mesh_vert_index].color = pin_radii
+
+        if has_weights:
+            mesh.attributes[ClothAttr.VERTEX_WEIGHT].data[mesh_vert_index].value = weights[cloth_vert_index]
+
+        if has_inflation_scale:
+            mesh.attributes[ClothAttr.INFLATION_SCALE].data[mesh_vert_index].value = inflation_scale[cloth_vert_index]
+
+        if has_force_transform:
+            mesh.attributes[ClothAttr.FORCE_TRANSFORM].data[mesh_vert_index].value = force_transform[cloth_vert_index]
+
+    custom_edges = [e for e in (cloth.controller.cloth_high.custom_edges or []) if e.vertex0 != e.vertex1]
+    if custom_edges:
+        next_edge = len(mesh.edges)
+        mesh.edges.add(len(custom_edges))
+        for custom_edge in custom_edges:
+            v0 = custom_edge.vertex0
+            v1 = custom_edge.vertex1
+            mv0 = int(cloth_to_mesh_map[v0])
+            mv1 = int(cloth_to_mesh_map[v1])
+            mesh.edges[next_edge].vertices = mv0, mv1
+            next_edge += 1
+
+    # Debug code to visualize the verlet cloth edges.
+    # debug_edges = [e for e in (cloth.controller.cloth_high.edges or []) if e.vertex0 != e.vertex1]
+    # if debug_edges:
+    #     debug_mesh = bpy.data.meshes.new(f"{mesh.name}.debug")
+    #     debug_obj = bpy.data.objects.new(f"{mesh.name}.debug", debug_mesh)
+    #     debug_mesh.vertices.add(len(mesh.vertices))
+    #     for v in mesh.vertices:
+    #         debug_mesh.vertices[v.index].co = v.co
+    #     next_edge = len(debug_mesh.edges)
+    #     debug_mesh.edges.add(len(debug_edges))
+    #     for edge in debug_edges:
+    #         v0 = edge.vertex0
+    #         v1 = edge.vertex1
+    #         mv0 = int(cloth_to_mesh_map[v0])
+    #         mv1 = int(cloth_to_mesh_map[v1])
+    #         debug_mesh.edges[next_edge].vertices = mv0, mv1
+    #         next_edge += 1
+    #
+    #     bpy.context.collection.objects.link(debug_obj)
+
+    cloth_props = frag_obj.fragment_properties.cloth
+    cloth_props.weight = cloth.controller.cloth_high.cloth_weight
+    if cloth.tuning:
+        tuning = cloth.tuning
+        cloth_props.enable_tuning = True
+        cloth_props.tuning_flags.total = str(tuning.flags)
+        cloth_props.extra_force = tuning.extra_force
+        cloth_props.weight_override = tuning.weight
+        cloth_props.distance_threshold = tuning.distance_threshold
+        if cloth_props.tuning_flags.wind_feedback:
+            cloth_props.rotation_rate = tuning.rotation_rate
+            cloth_props.angle_threshold = tuning.angle_threshold
+            cloth_props.pin_vert = cloth_to_mesh_map[tuning.pin_vert]
+            cloth_props.non_pin_vert0 = cloth_to_mesh_map[tuning.non_pin_vert0]
+            cloth_props.non_pin_vert1 = cloth_to_mesh_map[tuning.non_pin_vert1]
+
+    if cloth.controller.cloth_high.bounds:
+        cloth_bounds = create_bound_composite(cloth.controller.cloth_high.bounds)
+        cloth_bounds.name = f"{frag_obj.name}.cloth_world_bounds"
+        cloth_props.world_bounds = cloth_bounds
+
+
 def create_vehicle_windows(frag_xml: Fragment, frag_obj: bpy.types.Object, materials: list[bpy.types.Material]):
     if current_game() == SollumzGame.RDR:
         # TODO: RDR2 vehicle windows
         return
 
     for window_xml in frag_xml.vehicle_glass_windows:
-        window_bone = get_window_bone(
-            window_xml, frag_xml, frag_obj.data.bones)
+        window_bone = get_window_bone(window_xml, frag_xml, frag_obj.data.bones)
         col_obj = get_window_col(frag_obj, window_bone.name)
 
         window_name = f"{window_bone.name}_shattermap"
@@ -331,8 +494,7 @@ def create_vehicle_windows(frag_xml: Fragment, frag_obj: bpy.types.Object, mater
 
         col_obj.child_properties.is_veh_window = True
 
-        window_mat = get_veh_window_material(
-            window_xml, frag_xml.drawable, materials)
+        window_mat = get_veh_window_material(window_xml, frag_xml.drawable, materials)
 
         if window_mat is not None:
             col_obj.child_properties.window_mat = window_mat
@@ -630,3 +792,17 @@ def set_veh_window_properties(window_xml: Window, window_obj: bpy.types.Object):
     window_obj.vehicle_window_properties.data_min = window_xml.unk_float_17
     window_obj.vehicle_window_properties.data_max = window_xml.unk_float_18
     window_obj.vehicle_window_properties.cracks_texture_tiling = window_xml.cracks_texture_tiling
+
+
+def create_fragment_as_asset(frag_xml: Fragment, hi_frag_xml: Optional[Fragment], name: str, filepath: str):
+    """Create fragment as an asset with all meshes joined together."""
+    if hi_frag_xml is not None:
+        frag_xml = merge_hi_fragment(frag_xml, hi_frag_xml)
+
+    frag_xml.drawable.drawable_models_low = []
+    frag_xml.drawable.drawable_models_med = []
+    frag_xml.drawable.drawable_models_vlow = []
+
+    from ..ydr.ydrimport import convert_object_to_asset
+    frag_obj = create_fragment_obj(frag_xml, filepath, name)
+    convert_object_to_asset(name, frag_obj)

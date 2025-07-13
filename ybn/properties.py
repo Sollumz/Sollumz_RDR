@@ -2,6 +2,7 @@ import bpy
 from bpy.props import (
     BoolProperty
 )
+from ..sollumz_preferences import get_addon_preferences
 from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, SollumzGame, import_export_current_game, items_from_enums
 from bpy.app.handlers import persistent
 from .collision_materials import collisionmats, rdr_collisionmats
@@ -202,7 +203,6 @@ class BoundShapeProps(bpy.types.PropertyGroup):
         min=0.01,
     )
 
-
     def sphere_radius_getter(self) -> float:
         from .ybnexport import get_bound_extents
         from ..tools.meshhelper import get_inner_sphere_radius
@@ -225,7 +225,6 @@ class BoundShapeProps(bpy.types.PropertyGroup):
         unit="LENGTH",
         min=0.01,
     )
-
 
     def capsule_axis(self):
         obj = self.id_data
@@ -252,7 +251,7 @@ class BoundShapeProps(bpy.types.PropertyGroup):
         extents = bbmax - bbmin
         radius = extents.x * 0.5
         length = extents.z if self.capsule_axis() == "Z" else extents.y
-        length = max(0.0, length - radius * 2.0) # Remove capsule caps from length
+        length = max(0.0, length - radius * 2.0)  # Remove capsule caps from length
         return length
 
     def capsule_radius_setter(self, value: float):
@@ -282,7 +281,6 @@ class BoundShapeProps(bpy.types.PropertyGroup):
         unit="LENGTH",
         min=0.0,
     )
-
 
     def cylinder_axis(self):
         obj = self.id_data
@@ -410,7 +408,11 @@ def load_flag_presets():
 
 
 def load_collision_materials():
-    sollum_game_type = bpy.context.scene.sollum_collision_material_game_type
+    sollum_game_type = (
+        bpy.context.scene.sollum_collision_material_game_type
+        if hasattr(bpy.context, "scene")
+        else get_addon_preferences().default_game
+    )
     materials = collisionmats
     game = "sollumz_gta5"
     if sollum_game_type == SollumzGame.RDR:
@@ -443,7 +445,8 @@ def register():
     bpy.types.Object.composite_flags2 = bpy.props.PointerProperty(type=BoundFlags)
 
     bpy.types.WindowManager.sz_collision_material_index = bpy.props.IntProperty(name="Material Index")
-    bpy.types.WindowManager.sz_collision_materials = bpy.props.CollectionProperty(type=CollisionMaterial, name="Collision Materials")
+    bpy.types.WindowManager.sz_collision_materials = bpy.props.CollectionProperty(
+        type=CollisionMaterial, name="Collision Materials")
 
     bpy.types.Object.type_flags = bpy.props.PointerProperty(
         type=RDRBoundFlags)
@@ -499,6 +502,11 @@ def register():
              SOLLUMZ_UI_NAMES[SollumType.BOUND_CYLINDER], "Create a bound cylinder object"),
             (SollumType.BOUND_DISC.value,
              SOLLUMZ_UI_NAMES[SollumType.BOUND_DISC], "Create a bound disc object"),
+            (SollumType.BOUND_PLANE.value,
+             SOLLUMZ_UI_NAMES[SollumType.BOUND_PLANE] + " (for cloth only)",
+             "Create a bound plane object. This is an infinite plane that can only be used as part of a fragment cloth "
+             "world bounds"
+             ),
         ],
         name="Type",
         default=SollumType.BOUND_COMPOSITE.value
@@ -537,6 +545,7 @@ def register():
     )
 
     bpy.app.handlers.load_post.append(on_blend_file_loaded)
+    refresh_ui_collections()
 
 
 def unregister():

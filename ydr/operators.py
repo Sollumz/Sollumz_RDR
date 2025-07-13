@@ -194,10 +194,7 @@ class SOLLUMZ_OT_create_light(SOLLUMZ_OT_base, bpy.types.Operator):
 
         light_data = bpy.data.lights.new(name=SOLLUMZ_UI_NAMES[light_type], type=blender_light_type)
         light_data.sollum_type = light_type
-        light_obj = bpy.data.objects.new(name=SOLLUMZ_UI_NAMES[light_type], object_data=light_data)
-        light_obj.sollum_type = SollumType.LIGHT
-        context.collection.objects.link(light_obj)
-        context.view_layer.objects.active = light_obj
+        light_obj = create_blender_object(SollumType.LIGHT, SOLLUMZ_UI_NAMES[light_type], light_data)
 
         if active_obj and active_obj.sollum_type in [SollumType.DRAWABLE_MODEL, SollumType.DRAWABLE]:
             light_obj.parent = active_obj.parent if active_obj.sollum_type == SollumType.DRAWABLE_MODEL else active_obj
@@ -628,6 +625,12 @@ class MaterialConverterHelper:
 
     def execute(self, context):
         for obj in context.selected_objects:
+            if obj.type != 'MESH':
+                continue
+
+            if not obj.data.materials:
+                continue
+
             materials = self.get_materials(obj)
 
             for material in materials:
@@ -637,7 +640,7 @@ class MaterialConverterHelper:
                     continue
 
                 self.report(
-                    {"INFO"}, f"Successfuly converted material '{new_material.name}'.")
+                    {"INFO"}, f"Successfully converted material '{new_material.name}'.")
 
         return {"FINISHED"}
 
@@ -915,6 +918,25 @@ class SOLLUMZ_OT_unset_all_materials_embedded(SOLLUMZ_OT_base, bpy.types.Operato
 
         for obj in objs:
             self.set_materials_unembedded(obj)
+
+        return True
+
+
+class SOLLUMZ_OT_update_tinted_shader_graph(SOLLUMZ_OT_base, bpy.types.Operator):
+    """Update the tinted shader graph"""
+    bl_idname = "sollumz.update_tinted_shader_graph"
+    bl_label = "Update Tinted Shader"
+    bl_action = "Update Tinted Shader"
+
+    def run(self, context): 
+        objs = [obj for obj in context.selected_objects if obj.type == "MESH"]
+        if len(objs) == 0:
+            self.message(
+                f"No mesh objects selected!")
+            return False
+
+        for obj in objs:
+            create_tinted_shader_graph(obj)
 
         return True
 

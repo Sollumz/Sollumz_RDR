@@ -28,7 +28,7 @@ def create_brush(name):
     return bpy.data.brushes[name]
 
 
-def apply_brush_settings(brush, idx):
+def apply_terrain_brush_settings(brush, idx: int, paint_alpha: float | None = None):
     if idx < 5:
         brush.blend = "MIX"
     if idx == 1:
@@ -44,28 +44,20 @@ def apply_brush_settings(brush, idx):
         brush.color = (0, 1, 1)
         brush.strength = 1
     elif idx == 5:
-        alpha = bpy.context.scene.vert_paint_alpha
-        if alpha > 0:
+        assert paint_alpha is not None, "paint_alpha required"
+        if paint_alpha > 0:
             brush.color = (1, 1, 1)
             brush.blend = "ADD_ALPHA"
-            brush.strength = alpha
+            brush.strength = paint_alpha
         else:
             brush.color = (0, 0, 0)
             brush.blend = "ERASE_ALPHA"
-            brush.strength = alpha * -1
-    return brush
+            brush.strength = paint_alpha * -1
 
 
-def get_terrain_texture_brush(idx):
-    name = "TerrainBrush"
-
-    try:
-        brush = bpy.data.brushes[name]
-    except:
-        brush = create_brush(name)
-    apply_brush_settings(brush, idx)
-    bpy.context.scene.tool_settings.vertex_paint.brush = brush
-    return brush
+def apply_terrain_brush_setting_to_current_brush(idx: int, paint_alpha: float | None = None):
+    brush = bpy.context.scene.tool_settings.vertex_paint.brush
+    apply_terrain_brush_settings(brush, idx, paint_alpha)
 
 
 def material_from_image(img, name="Material", nodename="Image"):
@@ -295,11 +287,13 @@ def get_object_with_children(obj):
 # Sollumz types for which Object.hide_render should be set to false when created.
 _types_to_hide_in_render = {
     SollumType.BOUND_BOX, SollumType.BOUND_SPHERE, SollumType.BOUND_CAPSULE, SollumType.BOUND_CYLINDER,
-    SollumType.BOUND_DISC, SollumType.BOUND_CLOTH, SollumType.BOUND_GEOMETRY, SollumType.BOUND_GEOMETRYBVH,
+    SollumType.BOUND_DISC, SollumType.BOUND_PLANE, SollumType.BOUND_GEOMETRY, SollumType.BOUND_GEOMETRYBVH,
     SollumType.BOUND_COMPOSITE, SollumType.BOUND_POLY_BOX, SollumType.BOUND_POLY_CAPSULE,
     SollumType.BOUND_POLY_CYLINDER, SollumType.BOUND_POLY_SPHERE, SollumType.BOUND_POLY_TRIANGLE,
 
     SollumType.SHATTERMAP,
+
+    SollumType.CHARACTER_CLOTH_MESH,
 }
 
 
@@ -384,7 +378,7 @@ def get_pose_inverse(obj: bpy.types.Object) -> Matrix:
     pose_bone = get_child_of_pose_bone(obj)
 
     if bone and pose_bone:
-        return (pose_bone.matrix @ bone.matrix_local.inverted()).inverted()
+        return (bone.matrix_local.inverted() @ pose_bone.matrix).inverted()
 
     return Matrix()
 

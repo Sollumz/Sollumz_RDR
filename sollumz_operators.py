@@ -31,7 +31,7 @@ from .ycd.ycdexport import export_ycd
 from .ymap.ymapimport import import_ymap
 from .ymap.ymapexport import export_ymap
 from .ytyp.ytypimport import import_ytyp
-from .tools.blenderhelper import add_child_of_bone_constraint, get_child_of_pose_bone, get_terrain_texture_brush, remove_number_suffix, create_blender_object, join_objects
+from .tools.blenderhelper import add_child_of_bone_constraint, get_child_of_pose_bone, apply_terrain_brush_setting_to_current_brush, remove_number_suffix, create_blender_object, join_objects
 from .tools.ytyphelper import ytyp_from_objects
 from .ybn.properties import BoundFlags
 
@@ -354,7 +354,7 @@ class SOLLUMZ_OT_paint_terrain_tex1(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_label = "Paint Texture 1"
 
     def run(self, context):
-        get_terrain_texture_brush(1)
+        apply_terrain_brush_setting_to_current_brush(1)
         return True
 
 
@@ -364,7 +364,7 @@ class SOLLUMZ_OT_paint_terrain_tex2(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_label = "Paint Texture 2"
 
     def run(self, context):
-        get_terrain_texture_brush(2)
+        apply_terrain_brush_setting_to_current_brush(2)
         return True
 
 
@@ -374,7 +374,7 @@ class SOLLUMZ_OT_paint_terrain_tex3(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_label = "Paint Texture 3"
 
     def run(self, context):
-        get_terrain_texture_brush(3)
+        apply_terrain_brush_setting_to_current_brush(3)
         return True
 
 
@@ -384,7 +384,7 @@ class SOLLUMZ_OT_paint_terrain_tex4(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_label = "Paint Texture 4"
 
     def run(self, context):
-        get_terrain_texture_brush(4)
+        apply_terrain_brush_setting_to_current_brush(4)
         return True
 
 
@@ -393,8 +393,10 @@ class SOLLUMZ_OT_paint_terrain_alpha(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_idname = "sollumz.paint_a"
     bl_label = "Paint Alpha"
 
+    alpha: bpy.props.FloatProperty(name="Alpha", min=-1.0, max=1.0)
+
     def run(self, context):
-        get_terrain_texture_brush(5)
+        apply_terrain_brush_setting_to_current_brush(5, self.alpha)
         return True
 
 
@@ -407,6 +409,10 @@ class SelectTimeFlagsRange(SOLLUMZ_OT_base):
 
     def run(self, context):
         flags = self.get_flags(context)
+        return SelectTimeFlagsRange._process_one(flags, context)
+
+    @staticmethod
+    def _process_one(flags, context) -> bool:
         if not flags:
             return False
         start = int(flags.time_flags_start)
@@ -427,6 +433,21 @@ class SelectTimeFlagsRange(SOLLUMZ_OT_base):
         return True
 
 
+class SelectTimeFlagsRangeMultiSelect(SOLLUMZ_OT_base):
+    """Select range of time flags"""
+    bl_label = "Select"
+
+    def iter_selection_flags(self, context):
+        if False: # empty generator
+            yield
+
+    def run(self, context):
+        for flags in self.iter_selection_flags(context):
+            if not SelectTimeFlagsRange._process_one(flags, context):
+                return False
+        return True
+
+
 class ClearTimeFlags(SOLLUMZ_OT_base):
     """Clear all time flags"""
     bl_label = "Clear Selection"
@@ -436,11 +457,30 @@ class ClearTimeFlags(SOLLUMZ_OT_base):
 
     def run(self, context):
         flags = self.get_flags(context)
+        return ClearTimeFlags._process_one(flags, context)
+
+    @staticmethod
+    def _process_one(flags, context) -> bool:
         if not flags:
             return False
         for prop in TimeFlagsMixin.flag_names:
             flags[prop] = False
         flags.update_flag(context)
+        return True
+
+
+class ClearTimeFlagsMultiSelect(SOLLUMZ_OT_base):
+    """Clear all time flags"""
+    bl_label = "Clear Selection"
+
+    def iter_selection_flags(self, context):
+        if False: # empty generator
+            yield
+
+    def run(self, context):
+        for flags in self.iter_selection_flags(context):
+            if not ClearTimeFlags._process_one(flags, context):
+                return False
         return True
 
 
@@ -500,7 +540,7 @@ class SOLLUMZ_OT_debug_hierarchy(bpy.types.Operator):
         for bound in obj.children:
             if bound.type == "EMPTY":
                 if "cloth" in bound.name.lower():
-                    bound.sollum_type = SollumType.BOUND_CLOTH
+                    bound.sollum_type = SollumType.BOUND_PLANE
                     continue
 
                 if "bvh" in bound.name.lower():
