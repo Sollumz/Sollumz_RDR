@@ -96,6 +96,7 @@ def test_ops_update_tint_shader_correctly_syncs_attribute_names(plane_object):
     plane_object.select_set(True)
 
     shader_idx = SOLLUMZ_SHADERS.index("default_tnt.sps")
+    bpy.context.scene.sollum_game_type = SollumzGame.GTA
     bpy.ops.sollumz.createshadermaterial(shader_index=shader_idx)
 
     # Check the initial state after creating the tint shader

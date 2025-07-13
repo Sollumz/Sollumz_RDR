@@ -4,8 +4,8 @@ import bpy
 
 def pytest_sessionstart(session):
     # Re-enable so coverage correctly includes startup/registration code
-    bpy.ops.preferences.addon_disable(module="Sollumz")
-    bpy.ops.preferences.addon_enable(module="Sollumz")
+    bpy.ops.preferences.addon_disable(module="Sollumz_RDR")
+    bpy.ops.preferences.addon_enable(module="Sollumz_RDR")
 
 
 @pytest.fixture()
