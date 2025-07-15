@@ -222,7 +222,7 @@ class VertexBufferBuilder:
         self._char_cloth = char_cloth_xml
         self._bones = bones
 
-    def build(self, game: SollumzGame = SollumzGame.GTA):
+    def build(self, game: SollumzGame):
         set_import_export_current_game(game)
         if not self.mesh.loop_triangles:
             self.mesh.calc_loop_triangles()

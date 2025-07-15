@@ -410,12 +410,11 @@ def create_geometries_xml(
 
     domain = VBBuilderDomain[get_export_settings().mesh_domain] if mesh_domain_override is None else mesh_domain_override
     vb_builder = VertexBufferBuilder(mesh_eval, bone_by_vgroup, domain, materials, char_cloth_xml, bones)
-    total_vert_buffer = vb_builder.build()
+    total_vert_buffer = vb_builder.build(current_game())
     if domain == VBBuilderDomain.VERTEX:
         # bit dirty to use private data of the builder class, but we need this array here and it is already computed
         loop_to_vert_inds = vb_builder._loop_to_vert_inds
 
-    total_vert_buffer = VertexBufferBuilder(mesh_eval, bone_by_vgroup).build(current_game())
     for mat_index, loop_inds in loop_inds_by_mat.items():
         material = materials[mat_index]
         tangent_required = get_tangent_required(material)
