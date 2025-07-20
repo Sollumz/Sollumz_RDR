@@ -266,7 +266,7 @@ def create_model_xml(
 
     if current_game() == SollumzGame.RDR:
         if parent_obj is not None and parent_obj.sollum_type == SollumType.DRAWABLE_DICTIONARY and bones and model_obj.vertex_groups:
-            bone_by_vgroup = try_get_bone_tag_by_vgroup(model_obj.vertex_groups, bones)
+            bone_by_vgroup = try_get_bone_tag_by_vgroup(model_obj, armature_obj)
             model_xml.bone_mapping = [bone_tag for bone_tag in bone_by_vgroup.values()]
         else:
             delattr(model_xml, "bone_mapping")
