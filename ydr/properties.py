@@ -595,7 +595,7 @@ def update_shader_list():
     # Initialize shader materials collection with an entry per shader
     # We need the shader list as a collection property to be able to display it on the UI
     sollum_game_type = (
-        bpy.context.scene.sollum_collision_material_game_type
+        bpy.context.scene.sollum_shader_game_type
         if hasattr(bpy.context, "scene")
         else get_addon_preferences().default_game
     )
