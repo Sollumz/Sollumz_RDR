@@ -1,3 +1,4 @@
+import bpy
 from bpy.types import (
     Object,
     Context,
@@ -20,7 +21,8 @@ from collections.abc import Iterator
 from enum import Enum, IntEnum
 from ...tools.utils import get_list_item
 from ...ydr.light_flashiness import Flashiness, LightFlashinessEnumItems
-from ...sollumz_properties import SollumzGame, import_export_current_game as current_game
+from ...sollumz_properties import SollumzGame
+from ..utils import get_selected_ytyp
 
 if TYPE_CHECKING:
     from .ytyp import ArchetypeProperties
@@ -256,25 +258,43 @@ class ExtensionWithBoneTagMixin:
 class DoorExtensionProperties(BaseExtensionProperties, PropertyGroup):
     enable_limit_angle: BoolProperty(name="Enable Limit Angle")
     starts_locked: BoolProperty(name="Starts Locked")
-    door_target_ratio: FloatProperty(name="Door Target Ratio", min=0)
     can_break: BoolProperty(name="Can Break")
+    door_target_ratio: FloatProperty(name="Door Target Ratio", min=0)
     audio_hash: StringProperty(name="Audio Hash")
 
-    # TODO: this won't work correctly, it will only add the properties of whatever current_game is set the first time this
-    # file is imported. Need to have both sets of properties registered and only show one or the other in the UI based on
-    # the game
-    if current_game() == SollumzGame.GTA:
-        limit_angle: FloatProperty(name="Limit Angle")
-    elif current_game() == SollumzGame.RDR:
-        auto_opens: BoolProperty(name="Auto Open")
-        unknown_1: BoolProperty(name="Unknown 1")
-        skip_locked_interaction: BoolProperty(name="Skip Locked Interaction")
-        limit_angle_pull: FloatProperty(name="Limit Angle pull")
-        limit_angle_push: FloatProperty(name="Limit Angle push")
-        unknown_2: FloatProperty(name="Unknown 2")
-        unknown_3: FloatProperty(name="Unknown 3")
-        # door_tags: PointerProperty(name="Door tags", type=Object)
-    
+    # GTA5 properties
+    limit_angle: FloatProperty(name="Limit Angle")
+
+    # RDR2 properties
+    auto_opens: BoolProperty(name="Auto Opens")
+    unknown_1: BoolProperty(name="Unk 0x091A42D0")
+    skip_locked_interaction: BoolProperty(name="Skip Locked Interaction")
+    limit_angle_pull: FloatProperty(name="Limit Angle Pull")
+    limit_angle_push: FloatProperty(name="Limit Angle Push")
+    unknown_2: FloatProperty(name="Unk 0x9C555ECF")
+    unknown_3: FloatProperty(name="Unk 0xBCA0289E")
+    # door_tags: PointerProperty(name="Door tags", type=Object)
+
+    # Looks a bit overcomplicated but it's just to keep a similar order between GTA5 and RDR2 props
+    UI_COMMON_PROPS_1 = ("offset_position", "enable_limit_angle", "starts_locked", "can_break")
+    UI_COMMON_PROPS_2 = ("door_target_ratio", "audio_hash")
+    UI_GTA5_PROPS = (
+        UI_COMMON_PROPS_1 + ("limit_angle",) + UI_COMMON_PROPS_2
+    )
+    UI_RDR2_PROPS = (
+        UI_COMMON_PROPS_1 + ("limit_angle_pull", "limit_angle_push") +
+        UI_COMMON_PROPS_2 + ("auto_opens", "unknown_1", "skip_locked_interaction", "unknown_2", "unknown_3")
+    )
+
+    def draw_props(self, layout: UILayout):
+        props = (
+            DoorExtensionProperties.UI_RDR2_PROPS
+            if get_selected_ytyp(bpy.context).game == SollumzGame.RDR
+            else DoorExtensionProperties.UI_GTA5_PROPS
+        )
+        for prop_name in props:
+            row = layout.row()
+            row.prop(self, prop_name)
 
 
 class ParticleFxType(IntEnum):

@@ -271,13 +271,20 @@ class ExtensionDoor(Extension):
         self.enable_limit_angle = ValueProperty("enableLimitAngle", False)
         self.starts_locked = ValueProperty("startsLocked", False)
         self.can_break = ValueProperty("canBreak", False)
+        self.door_target_ratio = ValueProperty("doorTargetRatio")
+        self.audio_hash = TextProperty("audioHash")
+
         if current_game() == SollumzGame.GTA:
             self.limit_angle = ValueProperty("limitAngle", False)
         elif current_game() == SollumzGame.RDR:
-            self.limit_angle_pull = ValueProperty("nbjubyaa_0xcfe37bdb", False)
-            self.limit_angle_push = ValueProperty("gfkrydta_0xa0cf3c8d", False)
-        self.door_target_ratio = ValueProperty("doorTargetRatio")
-        self.audio_hash = TextProperty("audioHash")
+            self.auto_opens = ValueProperty("autoOpens", False)
+            self.unknown_1 = ValueProperty("ajihsdab_0x091a42d0", False)
+            self.skip_locked_interaction = ValueProperty("skipLockedInteraction", False)
+            self.limit_angle_pull = ValueProperty("limitAnglePos", 0.0)
+            self.limit_angle_push = ValueProperty("limitAngleNeg", 0.0)
+            self.unknown_2 = ValueProperty("mvynybwa_0x9c555ecf", 0.0)
+            self.unknown_3 = ValueProperty("ukmfuefa_0xbca0289e", 0.0)
+            # TODO: doorTags
 
 class ExtensionSpawnPoint(Extension):
     type = "CExtensionDefSpawnPoint"
