@@ -107,8 +107,9 @@ def create_entity_xml(entity: MloEntityProperties, archetype: ArchetypePropertie
     entity_xml.parent_index = entity.parent_index
     entity_xml.lod_dist = entity.lod_dist
     entity_xml.child_lod_dist = entity.child_lod_dist
-    entity_xml.ambient_occlusion_multiplier = entity.ambient_occlusion_multiplier
-    entity_xml.artificial_ambient_occlusion = entity.artificial_ambient_occlusion
+    if current_game() == SollumzGame.GTA:
+        entity_xml.ambient_occlusion_multiplier = entity.ambient_occlusion_multiplier
+        entity_xml.artificial_ambient_occlusion = entity.artificial_ambient_occlusion
     entity_xml.tint_value = entity.tint_value
     if current_game() == SollumzGame.RDR:
         entity_xml.blend_age_layer = entity.blend_age_layer

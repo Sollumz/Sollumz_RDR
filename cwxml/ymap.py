@@ -417,7 +417,10 @@ class Entity(ElementTree):
         self.type = AttributeProperty("type", "CEntityDef")
         self.archetype_name = TextProperty("archetypeName")
         self.flags = ValueProperty("flags", 0)
-        self.guid = ValueProperty("guid", 0)
+        if current_game() == SollumzGame.RDR:
+            self.guid = ValueProperty("id", 0)
+        else:
+            self.guid = ValueProperty("guid", 0)
         self.position = VectorProperty("position")
         self.rotation = QuaternionProperty("rotation")
         self.scale_xy = ValueProperty("scaleXY", 0)
@@ -429,12 +432,13 @@ class Entity(ElementTree):
         self.num_children = ValueProperty("numChildren", 0)
         self.priority_level = TextProperty("priorityLevel")
         self.extensions = ExtensionsList()
-        self.ambient_occlusion_multiplier = ValueProperty(
-            "ambientOcclusionMultiplier", 0)
-        self.artificial_ambient_occlusion = ValueProperty(
-            "artificialAmbientOcclusion", 0)
+        if current_game() == SollumzGame.GTA:
+            self.ambient_occlusion_multiplier = ValueProperty("ambientOcclusionMultiplier", 0)
+            self.artificial_ambient_occlusion = ValueProperty("artificialAmbientOcclusion", 0)
         self.tint_value = ValueProperty("tintValue", 0)
+
         if current_game() == SollumzGame.RDR:
+            self.power_grid_id = ValueProperty("powerGridId", 0)
             self.blend_age_layer = ValueProperty("blendAgeLayer", 0)
             self.blend_age_dirt = ValueProperty("blendAgeDirt", 0)
 

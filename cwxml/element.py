@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 from xml.etree import ElementTree as ET
 from numpy import float32
+from ..tools.jenkhash import name_to_hash_literal
+from contextlib import contextmanager
 
 
 def remove_elements_with_no_attributes(elem):
@@ -55,6 +57,10 @@ def get_str_type(value: str):
         except:
             pass
         try:
+            return int(value, 16)
+        except:
+            pass
+        try:
             return float(value)
         except:
             pass
@@ -68,6 +74,10 @@ class Element(AbstractClass):
     @abstractmethod
     def tag_name(self):
         raise NotImplementedError
+
+    @property
+    def tag_name_hash(self) -> int:
+        return name_to_hash_literal(self.tag_name)
 
     @classmethod
     def read_value_error(cls, element):
@@ -103,6 +113,19 @@ class Element(AbstractClass):
 class ElementTree(Element):
     """XML element that contains children defined by it's properties"""
 
+    _allow_hash_lookup = False
+
+    @staticmethod
+    @contextmanager
+    def allow_hash_lookup():
+        """Enable element tag lookup by hash if exact string is not found."""
+        try:
+            prev = ElementTree._allow_hash_lookup
+            ElementTree._allow_hash_lookup = True
+            yield
+        finally:
+            ElementTree._allow_hash_lookup = prev
+
     @classmethod
     def from_xml(cls: Element, element: ET.Element, *args):
         """Convert ET.Element object to ElementTree"""
@@ -110,10 +133,19 @@ class ElementTree(Element):
         if new.tag_name != element.tag:
             new.tag_name = element.tag
 
+        child_elements_by_hash = None
+
         for prop_name, obj_element in vars(new).items():
             if isinstance(obj_element, Element):
                 child = element.find(obj_element.tag_name)
-                if child is not None and obj_element.tag_name == child.tag:
+                if ElementTree._allow_hash_lookup and child is None:
+                    # Not found, try matching by hash
+                    if child_elements_by_hash is None:
+                        child_elements_by_hash = {name_to_hash_literal(c.tag): c for c in element}
+
+                    child = child_elements_by_hash.get(obj_element.tag_name_hash, None)
+
+                if child is not None:
                     # Add element to object if tag is defined in class definition
                     setattr(new, prop_name, type(obj_element).from_xml(child))
             elif isinstance(obj_element, AttributeProperty):

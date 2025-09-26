@@ -444,8 +444,7 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
     load_flags: bpy.props.IntProperty(name="Load Flags")
     avoidanceflags: bpy.props.IntProperty(name="Avoidance Flags")
     guid: bpy.props.IntProperty(name="GUID")
-    unknown_1: bpy.props.EnumProperty(
-        items=items_from_enums(MapEntityType), name="Unknown 1")
+    unknown_1: bpy.props.EnumProperty(items=items_from_enums(MapEntityType), name="Unknown 1")
     # ^ RDR
     special_attribute: bpy.props.EnumProperty(
         name="Special Attribute", items=SpecialAttributeEnumItems, default=SpecialAttribute.NOTHING_SPECIAL.name)

@@ -99,10 +99,9 @@ def entity_from_obj(obj):
     entity.lod_level = obj.entity_properties.lod_level.upper().replace("SOLLUMZ_", "")
     entity.num_children = int(obj.entity_properties.num_children)
     entity.priority_level = obj.entity_properties.priority_level.upper().replace("SOLLUMZ_", "")
-    entity.ambient_occlusion_multiplier = int(
-        obj.entity_properties.ambient_occlusion_multiplier)
-    entity.artificial_ambient_occlusion = int(
-        obj.entity_properties.artificial_ambient_occlusion)
+    if current_game() == SollumzGame.GTA:
+        entity.ambient_occlusion_multiplier = int(obj.entity_properties.ambient_occlusion_multiplier)
+        entity.artificial_ambient_occlusion = int(obj.entity_properties.artificial_ambient_occlusion)
     entity.tint_value = int(obj.entity_properties.tint_value)
     if current_game() == SollumzGame.RDR:
         entity.blend_age_layer = int(obj.entity_properties.blend_age_layer)

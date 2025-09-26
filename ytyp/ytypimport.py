@@ -52,8 +52,9 @@ def create_entity_set_entity(entity_xml: ymapxml.Entity, entity_set: EntitySetPr
     entity.lod_level = EntityLodLevel[entity_xml.lod_level]
     entity.priority_level = EntityPriorityLevel[entity_xml.priority_level]
     entity.num_children = entity_xml.num_children
-    entity.ambient_occlusion_multiplier = entity_xml.ambient_occlusion_multiplier
-    entity.artificial_ambient_occlusion = entity_xml.artificial_ambient_occlusion
+    if current_game() == SollumzGame.GTA:
+        entity.ambient_occlusion_multiplier = entity_xml.ambient_occlusion_multiplier
+        entity.artificial_ambient_occlusion = entity_xml.artificial_ambient_occlusion
     entity.tint_value = entity_xml.tint_value
     if current_game() == SollumzGame.RDR:
         entity.blend_age_layer = entity_xml.blend_age_layer
@@ -164,8 +165,9 @@ def create_mlo_entity(entity_xml: ymapxml.Entity, archetype: ArchetypeProperties
     entity.lod_level = EntityLodLevel[entity_xml.lod_level]
     entity.priority_level = EntityPriorityLevel[entity_xml.priority_level]
     entity.num_children = entity_xml.num_children
-    entity.ambient_occlusion_multiplier = entity_xml.ambient_occlusion_multiplier
-    entity.artificial_ambient_occlusion = entity_xml.artificial_ambient_occlusion
+    if current_game() == SollumzGame.GTA:
+        entity.ambient_occlusion_multiplier = entity_xml.ambient_occlusion_multiplier
+        entity.artificial_ambient_occlusion = entity_xml.artificial_ambient_occlusion
     entity.tint_value = entity_xml.tint_value
     if current_game() == SollumzGame.RDR:
         entity.blend_age_layer = entity_xml.blend_age_layer
@@ -379,6 +381,8 @@ def get_map_entity_type_enum(map_entity_type: str) -> str:
     elif map_entity_type == "MAP_ENTITY_TYPE_PROP_BATCH":
         return MapEntityType.PROP_BATCH
 
+    raise ValueError(f"Unknown map entity type '{map_entity_type}'")
+
 
 def create_archetype(archetype_xml: ytypxml.BaseArchetype, ytyp: CMapTypesProperties):
     """Create a ytyp archetype given an archetype cwxml and a Blender ytyp data-block."""
@@ -402,10 +406,9 @@ def create_archetype(archetype_xml: ytypxml.BaseArchetype, ytyp: CMapTypesProper
     archetype.asset_type = get_asset_type_enum(archetype_xml.asset_type)
 
     if current_game() == SollumzGame.RDR:
-        archetype.load_flags = archetype_xml.load_flags if isinstance(
-            archetype_xml.load_flags, int) else int(archetype_xml.load_flags, 0)
-        archetype.guid = archetype_xml.guid if isinstance(
-            archetype_xml.guid, int) else int(archetype_xml.guid, 0)
+        archetype.load_flags = archetype_xml.load_flags
+        archetype.avoidanceflags = archetype_xml.avoidanceflags
+        archetype.guid = archetype_xml.guid
         archetype.unknown_1 = get_map_entity_type_enum(archetype_xml.unknown_1)
 
     find_and_set_archetype_asset(archetype)

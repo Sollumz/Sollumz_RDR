@@ -25,7 +25,9 @@ class YTYP:
             set_import_export_current_game(SollumzGame.RDR)
         else:
             set_import_export_current_game(SollumzGame.GTA)
-        return CMapTypes.from_xml_file(filepath)
+
+        with ElementTree.allow_hash_lookup():
+            return CMapTypes.from_xml_file(filepath)
 
     @staticmethod
     def write_xml(cmap_types, filepath):
@@ -38,11 +40,8 @@ class BaseArchetype(ElementTree):
     def __init__(self):
         super().__init__()
         self.type = AttributeProperty("type", "CBaseArchetypeDef")
-        if current_game() == SollumzGame.RDR:
-            self.load_flags = ValueProperty("loadFlags")
         self.lod_dist = ValueProperty("lodDist")
         self.flags = ValueProperty("flags")
-        self.avoidanceflags = ValueProperty("avoidanceflags")
         self.special_attribute = ValueProperty("specialAttribute")
         self.bb_min = VectorProperty("bbMin")
         self.bb_max = VectorProperty("bbMax")
@@ -57,7 +56,10 @@ class BaseArchetype(ElementTree):
         self.asset_type = TextProperty("assetType")
         self.asset_name = TextProperty("assetName")
         self.extensions = ExtensionsList()
+
         if current_game() == SollumzGame.RDR:
+            self.load_flags = ValueProperty("loadFlags")
+            self.avoidanceflags = ValueProperty("avoidanceflags")
             self.guid = ValueProperty("guid")
             self.unknown_1 = TextProperty("zqNiUDA_0x07D164A8")
 
