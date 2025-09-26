@@ -10,12 +10,12 @@ from .test_fixtures import (
     SOLLUMZ_COLLISION_MATERIALS_RDR,
 )
 from ..ydr.shader_materials import create_shader
+from ..ydr.operators.materials import MaterialConverter
 from ..ybn.collision_materials import create_collision_material_from_index
 from ..ynv.ynvimport import get_material as ynv_get_material
 from ..tools.ymaphelper import add_occluder_material
 from ..sollumz_properties import SollumType, SollumzGame
 from ..tools.blenderhelper import find_bsdf_and_material_output, material_from_image
-from ..tools.drawablehelper import MaterialConverter
 
 
 @pytest.fixture(scope="class", params=BLENDER_LANGUAGES)

@@ -10,8 +10,10 @@ from bpy.props import (
     FloatVectorProperty,
     CollectionProperty,
     PointerProperty,
+    EnumProperty,
 )
 import os
+import math
 from typing import Optional
 from ..tools.blenderhelper import lod_level_enum_flag_prop_factory
 from ..sollumz_preferences import get_addon_preferences
@@ -195,6 +197,21 @@ class BoneFlag(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(default="")
 
 
+BoneFlagEnumItems = (
+    ("RotX", "RotX", "", 0x1),
+    ("RotY", "RotY", "", 0x2),
+    ("RotZ", "RotZ", "", 0x4),
+
+    ("TransX", "TransX", "", 0x10),
+    ("TransY", "TransY", "", 0x20),
+    ("TransZ", "TransZ", "", 0x40),
+
+    ("ScaleX", "ScaleX", "", 0x100),
+    ("ScaleY", "ScaleY", "", 0x200),
+    ("ScaleZ", "ScaleZ", "", 0x400),
+)
+
+
 class BoneProperties(bpy.types.PropertyGroup):
     @staticmethod
     def calc_tag_hash(bone_name: str) -> int:
@@ -245,15 +262,43 @@ class BoneProperties(bpy.types.PropertyGroup):
         self.manual_tag = value
         self.use_manual_tag = value != self.calc_tag()
 
-    tag: bpy.props.IntProperty(
+    def get_flags_enum(self):
+        flag_set = set(f.name for f in self.flags)
+        flag_int = 0
+        for name, _, _, value in BoneFlagEnumItems:
+            if name in flag_set:
+                flag_int |= value
+
+        return flag_int
+
+    def set_flags_enum(self, flag_int: int):
+        flags = []
+        for name, _, _, value in BoneFlagEnumItems:
+            if (flag_int & value) != 0:
+                flags.append(name)
+
+        self.flags.clear()
+        for flag_name in flags:
+            new_flag = self.flags.add()
+            new_flag.name = flag_name
+
+    tag: IntProperty(
         name="Tag", description="Unique value that identifies this bone in the armature",
-        get=get_tag, set=set_tag, default=0, min=0, max=0xFFFF)
-    manual_tag: bpy.props.IntProperty(name="Manual Tag", default=0, min=0, max=0xFFFF)
-    use_manual_tag: bpy.props.BoolProperty(
+        get=get_tag, set=set_tag, default=0, min=0, max=0xFFFF
+    )
+    manual_tag: IntProperty(name="Manual Tag", default=0, min=0, max=0xFFFF)
+    use_manual_tag: BoolProperty(
         name="Use Manual Tag", description="Specify a tag instead of auto-calculating it",
         default=False)
-    flags: bpy.props.CollectionProperty(type=BoneFlag)
-    ul_index: bpy.props.IntProperty(name="UIListIndex", default=0)
+
+    # Just a wrapper around the flags collection property due to backwards compatibility, but it really doesn't make
+    # sense to have a collection for this
+    flags_enum: EnumProperty(
+        items=BoneFlagEnumItems, name="Flags", options={"ENUM_FLAG"},
+        get=get_flags_enum, set=set_flags_enum
+    )
+    flags: CollectionProperty(type=BoneFlag)
+    ul_index: IntProperty(name="UIListIndex", default=0)
 
 
 class ShaderMaterial(bpy.types.PropertyGroup):
@@ -278,9 +323,13 @@ class ShaderMaterial(bpy.types.PropertyGroup):
     )
 
 
+LIGHT_INTENSITY_SCALE_FACTOR = 500
+
+
 class LightProperties(bpy.types.PropertyGroup):
-    flashiness: bpy.props.EnumProperty(name="Flashiness", items=LightFlashinessEnumItems,
-                                       default=Flashiness.CONSTANT.name)
+    flashiness: bpy.props.EnumProperty(
+        name="Flashiness", items=LightFlashinessEnumItems, default=Flashiness.CONSTANT.name
+    )
     group_id: bpy.props.IntProperty(name="Group ID")
     culling_plane_normal: bpy.props.FloatVectorProperty(name="Culling Plane Normal", subtype="XYZ")
     culling_plane_offset: bpy.props.FloatProperty(name="Culling Plane Offset", subtype="DISTANCE")
@@ -312,6 +361,93 @@ class LightProperties(bpy.types.PropertyGroup):
     corona_z_bias: bpy.props.FloatProperty(name="Corona Z Bias", default=0.1)
     extent: bpy.props.FloatVectorProperty(name="Extent", default=(1, 1, 1), subtype="XYZ", soft_min=0.01, unit="LENGTH")
     projected_texture_hash: bpy.props.StringProperty(name="Projected Texture Hash")
+
+    # Wrapper properties
+    def _get_intensity(self) -> float:
+        return self.id_data.energy / LIGHT_INTENSITY_SCALE_FACTOR
+
+    def _set_intensity(self, value: float):
+        self.id_data.energy = value * LIGHT_INTENSITY_SCALE_FACTOR
+
+    intensity: FloatProperty(
+        name="Intensity",
+        get=_get_intensity, set=_set_intensity,
+    )
+
+    def _get_falloff(self) -> float:
+        return self.id_data.cutoff_distance
+
+    def _set_falloff(self, value: float):
+        self.id_data.use_custom_distance = True
+        self.id_data.cutoff_distance = value
+
+    falloff: FloatProperty(
+        name="Falloff",
+        get=_get_falloff, set=_set_falloff,
+        min=0.0,
+    )
+
+    def _get_falloff_exponent(self) -> float:
+        return self.id_data.shadow_soft_size * 5
+
+    def _set_falloff_exponent(self, value: float):
+        self.id_data.shadow_soft_size = value / 5
+
+    falloff_exponent: FloatProperty(
+        name="Falloff Exponent",
+        get=_get_falloff_exponent, set=_set_falloff_exponent,
+        min=0.0,
+    )
+
+    def _get_volume_intensity(self) -> float:
+        return self.id_data.volume_factor
+
+    def _set_volume_intensity(self, value: float):
+        self.id_data.volume_factor = value
+
+    volume_intensity: FloatProperty(
+        name="Volume Intensity",
+        get=_get_volume_intensity, set=_set_volume_intensity,
+        min=0.0,
+    )
+
+    def _get_shadow_near_clip(self) -> float:
+        return self.id_data.shadow_buffer_clip_start
+
+    def _set_shadow_near_clip(self, value: float):
+        self.id_data.shadow_buffer_clip_start = value
+
+    shadow_near_clip: FloatProperty(
+        name="Shadow Near Clip",
+        get=_get_shadow_near_clip, set=_set_shadow_near_clip,
+        min=1e-6,
+    )
+
+    def _get_cone_inner_angle(self) -> float:
+        return abs((self.id_data.spot_blend * math.pi) - math.pi)
+
+    def _set_cone_inner_angle(self, value: float):
+        self.id_data.spot_blend = abs((value / math.pi) - 1)
+
+    cone_inner_angle: FloatProperty(
+        name="Cone Inner Angle",
+        get=_get_cone_inner_angle, set=_set_cone_inner_angle,
+        subtype="ANGLE",
+        min=0.0, max=math.pi / 2,
+    )
+
+    def _get_cone_outer_angle(self) -> float:
+        return self.id_data.spot_size / 2
+
+    def _set_cone_outer_angle(self, value: float):
+        self.id_data.spot_size = value * 2
+
+    cone_outer_angle: FloatProperty(
+        name="Cone Outer Angle",
+        get=_get_cone_outer_angle, set=_set_cone_outer_angle,
+        subtype="ANGLE",
+        min=0.0, max=math.pi / 2,
+    )
 
 
 class PresetEntry(bpy.types.PropertyGroup):
@@ -678,8 +814,7 @@ def register():
         set=set_light_type
     )
     bpy.types.Light.is_capsule = bpy.props.BoolProperty()
-    bpy.types.Light.light_properties = bpy.props.PointerProperty(
-        type=LightProperties)
+    bpy.types.Light.light_properties = bpy.props.PointerProperty(type=LightProperties)
     bpy.types.Scene.create_light_type = bpy.props.EnumProperty(
         items=[
             (LightType.POINT.value,

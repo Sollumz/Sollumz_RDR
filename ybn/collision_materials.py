@@ -457,6 +457,7 @@ def create_collision_material_from_index(index: int, game: SollumzGame) -> Mater
 
     mat = compile_to_material(matinfo.name, collision_material_shader_expr(r, g, b))
     mat.sollum_type = MaterialType.COLLISION
+    mat.sollum_game_type = game
     mat.collision_properties.collision_index = index
     mat.diffuse_color = r, g, b, 1.0
     return mat

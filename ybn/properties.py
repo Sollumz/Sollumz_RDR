@@ -2,15 +2,19 @@ import bpy
 from bpy.props import (
     BoolProperty
 )
-from ..sollumz_preferences import get_addon_preferences
+from typing import TYPE_CHECKING
 from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, SollumzGame, import_export_current_game, items_from_enums
 from bpy.app.handlers import persistent
 from .collision_materials import collisionmats, rdr_collisionmats
 from ..cwxml.flag_preset import FlagPresetsFile
 from ..tools.meshhelper import create_disc, create_cylinder, create_sphere, create_capsule, create_box
 from ..tools.blenderhelper import tag_redraw
+from ..sollumz_preferences import get_addon_preferences
 from mathutils import Vector, Matrix
 import os
+
+if TYPE_CHECKING:
+    from ..ytyp.properties.mlo import ArchetypeProperties
 
 
 class CollisionMatFlags(bpy.types.PropertyGroup):
@@ -79,14 +83,166 @@ def get_collision_mat_raw_flags(f: CollisionMatFlags) -> tuple[int, int]:
     return flags_lo, flags_hi
 
 
+MAX_NUM_PROCEDURAL_IDS = 255
+
+
+# TODO: procedural IDs for RDR2
+def ProceduralIdEnumItems(_self=None, context=None, *, full=False) -> tuple[tuple, ...]:
+    try:
+        return ProceduralIdEnumItems._full if full else ProceduralIdEnumItems._formatted
+    except AttributeError:
+        def _load_json(path: str) -> list:
+            import json
+            with open(path, "rb") as f:
+                contents = json.load(f)
+
+            contents = [str(procid) for procid in contents]
+            if len(contents) >= MAX_NUM_PROCEDURAL_IDS:
+                # Trim any additional entries
+                contents = contents[:MAX_NUM_PROCEDURAL_IDS]
+            elif len(contents) < MAX_NUM_PROCEDURAL_IDS:
+                # Fill any missing entries with null
+                contents += ["null"] * (MAX_NUM_PROCEDURAL_IDS - len(contents))
+
+            return contents
+
+        prefs = get_addon_preferences(context)
+        procids_path = prefs.custom_procids_path
+        procids = None
+        if procids_path and os.path.isfile(procids_path):
+            try:
+                procids = _load_json(procids_path)
+            except Exception:
+                procids = None
+
+        if not procids:
+            # No custom procedural IDs, load the default JSON
+            default_procids_path = os.path.join(os.path.dirname(__file__), "procids.json")
+            procids = _load_json(default_procids_path)
+
+        if procids:
+            procids_full = [
+                (f"PROCID_{idx}", name, name, idx)
+                for idx, name in enumerate(procids)
+            ]
+            procids_formatted = [
+                (f"PROCID_{idx}", f"{idx} | {name}", name, idx)
+                for idx, name in enumerate(procids) if name != "null"
+            ]
+            separators_to_insert = []
+            separators_step = 24
+            for i in range(0, len(procids_formatted)-1, separators_step):
+                from_idx = procids_formatted[i][3]
+                to_idx = procids_formatted[min(i+separators_step-1, len(procids_formatted)-2)][3]
+                separators_to_insert.append((i, ("", f"{from_idx}-{to_idx}", "", -1)))
+
+            for idx, separator in reversed(separators_to_insert):
+                procids_formatted.insert(idx, separator)
+
+            # All null entries will fallback to the null entry at 0
+            procids_formatted += [None, ("PROCID_0", "null", "null", 0)]
+
+            ProceduralIdEnumItems._full = tuple(procids_full)
+            ProceduralIdEnumItems._formatted = tuple(procids_formatted)
+        else:
+            ProceduralIdEnumItems._full = []
+            ProceduralIdEnumItems._formatted = []
+        return ProceduralIdEnumItems._full if full else ProceduralIdEnumItems._formatted
+
+
+def ProceduralIdEnumItems_reload():
+    try:
+        # Will reload next time ProceduralIdEnumItems is called
+        del ProceduralIdEnumItems._formatted
+        del ProceduralIdEnumItems._full
+    except AttributeError:
+        pass
+
+
+def ProceduralIdEnumItems_is_mapped(idx: int) -> bool:
+    items = ProceduralIdEnumItems(full=True)
+    return 0 <= idx < MAX_NUM_PROCEDURAL_IDS and items[idx][1] != "null"
+
+
+ProceduralIdEnumItems.reload = ProceduralIdEnumItems_reload
+ProceduralIdEnumItems.is_mapped = ProceduralIdEnumItems_is_mapped
+del ProceduralIdEnumItems_reload
+del ProceduralIdEnumItems_is_mapped
+
+_collision_material_room_items_refs = {}
+_collision_material_mlo_archetype_cache = {}  # [material name] -> (ytyp index, archetype index)
+
+
 class CollisionProperties(CollisionMatFlags, bpy.types.PropertyGroup):
     collision_index: bpy.props.IntProperty(name="Collision Index", default=0)
-    procedural_id: bpy.props.IntProperty(name="Procedural ID", default=0)
-    room_id: bpy.props.IntProperty(name="Room ID", default=0)
+    procedural_id: bpy.props.IntProperty(name="Procedural ID", default=0, min=0, max=MAX_NUM_PROCEDURAL_IDS-1)
+    room_id: bpy.props.IntProperty(name="Room ID", default=0, min=0)
     ped_density: bpy.props.IntProperty(name="Ped Density", default=0)
     material_color_index: bpy.props.IntProperty(name="Material Color Index", default=0)
     unk: bpy.props.IntProperty(
         name="Unk", default=0)
+
+    def _get_procedural_id(self) -> int:
+        value = self.procedural_id
+        return value if ProceduralIdEnumItems.is_mapped(value) else 0
+
+    def _set_procedural_id(self, value: int):
+        self.procedural_id = value if 0 <= value < MAX_NUM_PROCEDURAL_IDS else 0
+
+    procedural_id_enum: bpy.props.EnumProperty(
+        items=ProceduralIdEnumItems,
+        name="Procedural ID",
+        get=_get_procedural_id, set=_set_procedural_id
+    )
+
+    def check_room_id_enum_available(self, context) -> bool:
+        """Call this before using the `room_id_enum` property."""
+        return self._find_mlo_archetype_for_active_object(context, False) is not None
+
+    def _find_mlo_archetype_for_active_object(self, context, lookup_cache: bool) -> "ArchetypeProperties | None":
+        if lookup_cache:
+            if (idx_pair := _collision_material_mlo_archetype_cache.get(self.id_data.name, None)) is not None:
+                ytyp_idx, archetype_idx = idx_pair
+                return context.scene.ytyps[ytyp_idx].archetypes[archetype_idx]
+            else:
+                return None
+
+        from ..sollumz_helper import find_sollumz_parent
+        # It is possible to have a mismatch here between the active object and the object that actually uses this
+        # collision material, but this should only be called from the UI where we use the active material of the
+        # active object, so should be ok in most cases.
+        # There isn't really a quick way to get the object from material, and there can be multiple objects using this
+        # material anyways (hopefully not in separate MLOs).
+        bound_obj = context.active_object
+        composite_obj = find_sollumz_parent(bound_obj, SollumType.BOUND_COMPOSITE)
+        if not composite_obj:
+            return None
+
+        for ytyp_idx, ytyp in enumerate(context.scene.ytyps):
+            if (archetype_idx := ytyp.find_mlo_archetype_index_with_asset(composite_obj)) is not None:
+                _collision_material_mlo_archetype_cache[self.id_data.name] = ytyp_idx, archetype_idx
+                return ytyp.archetypes[archetype_idx]
+
+        return None
+
+    def _get_room_items(self, context) -> list:
+        mlo = self._find_mlo_archetype_for_active_object(context, True)
+        if not mlo:
+            return []
+        from ..ytyp.properties.mlo import get_room_items_for_archetype
+        items = get_room_items_for_archetype(mlo)
+        items = [(name, f"{idx - 1} | {label}", desc, idx - 1) for idx, (name, label, desc, value) in enumerate(items) if idx > 0]
+        # need to keep a reference to the array on Python side while Blender uses it
+        _collision_material_room_items_refs[mlo.uuid] = items
+        return items
+
+    def _get_room(self) -> int:
+        return self.room_id
+
+    def _set_room(self, value: int):
+        self.room_id = value if value >= 0 else 0
+
+    room_id_enum: bpy.props.EnumProperty(name="Room ID", items=_get_room_items, get=_get_room, set=_set_room, default=0)
 
 
 class BoundFlags(bpy.types.PropertyGroup):
@@ -348,12 +504,10 @@ class BoundShapeProps(bpy.types.PropertyGroup):
 
 class CollisionMaterial(bpy.types.PropertyGroup):
     def _get_favorite(self):
-        from ..sollumz_preferences import get_addon_preferences
         preferences = get_addon_preferences(bpy.context)
         return preferences.is_favorite_collision_material(self.name)
 
     def _set_favorite(self, value):
-        from ..sollumz_preferences import get_addon_preferences
         preferences = get_addon_preferences(bpy.context)
         preferences.toggle_favorite_collision_material(self.name, value)
 
@@ -568,3 +722,6 @@ def unregister():
     del bpy.types.WindowManager.sz_create_bound_box_parent
 
     bpy.app.handlers.load_post.remove(on_blend_file_loaded)
+
+    _collision_material_room_items_refs.clear()
+    _collision_material_mlo_archetype_cache.clear()

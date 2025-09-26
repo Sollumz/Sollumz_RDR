@@ -140,9 +140,6 @@ def create_drawable_xml(
         armature_obj = None
         original_pose = "POSE"
 
-    if char_cloth_xml:
-        char_cloth_xml._tmp_skeleton = drawable_xml.skeleton
-
     create_model_xmls(drawable_xml, drawable_obj, materials, armature_obj, char_cloth_xml)
 
     if current_game() == SollumzGame.GTA:
@@ -152,9 +149,6 @@ def create_drawable_xml(
     set_drawable_xml_extents(drawable_xml)
 
     create_embedded_collision_xmls(drawable_obj, drawable_xml)
-
-    if char_cloth_xml:
-        char_cloth_xml._tmp_skeleton = None
 
     if armature_obj is not None:
         armature_obj.data.pose_position = original_pose
@@ -965,7 +959,9 @@ def set_bone_xml_flags(bone_xml: Bone, pose_bone: bpy.types.PoseBone):
     for constraint in pose_bone.constraints:
         if constraint.type == "LIMIT_ROTATION":
             bone_xml.flags.append("LimitRotation")
-            break
+
+        if constraint.type == "LIMIT_LOCATION":
+            bone_xml.flags.append("LimitTranslation")
 
     if bone.children:
         bone_xml.flags.append("Unk0")

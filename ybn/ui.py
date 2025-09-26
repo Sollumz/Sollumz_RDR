@@ -3,7 +3,7 @@ from bpy.props import (
     BoolProperty
 )
 import os
-from .properties import BoundFlags, RDRBoundFlags, CollisionMatFlags
+from .properties import BoundFlags, RDRBoundFlags, CollisionMatFlags, ProceduralIdEnumItems
 from ..sollumz_properties import MaterialType, SollumType, SollumzGame, BOUND_TYPES, BOUND_POLYGON_TYPES
 from .collision_materials import collisionmats, rdr_collisionmats
 from ..sollumz_ui import SOLLUMZ_PT_OBJECT_PANEL, SOLLUMZ_PT_MAT_PANEL
@@ -49,8 +49,22 @@ class SOLLUMZ_PT_COL_MAT_PROPERTIES_PANEL(bpy.types.Panel):
         mat = context.active_object.active_material
 
         grid = self.layout.grid_flow(columns=2, even_columns=True, even_rows=True)
-        grid.prop(mat.collision_properties, "procedural_id")
-        grid.prop(mat.collision_properties, "room_id")
+        col = grid.column(align=True)
+        col.prop(mat.collision_properties, "procedural_id")
+        if mat.sollum_game_type == SollumzGame.GTA: # TODO: procedural IDs for RDR
+            split = col.split(factor=0.4, align=True)
+            split.row()  # empty space on the left
+            split.row(align=True).prop_menu_enum(
+                mat.collision_properties, "procedural_id_enum",
+                text=ProceduralIdEnumItems(full=True)[mat.collision_properties.procedural_id][1]
+            )
+
+        col = grid.column(align=True)
+        col.prop(mat.collision_properties, "room_id")
+        if mat.collision_properties.check_room_id_enum_available(context):
+            split = col.split(factor=0.4, align=True)
+            split.row()  # empty space on the left
+            split.row(align=True).prop(mat.collision_properties, "room_id_enum", text="")
         grid.prop(mat.collision_properties, "ped_density")
         grid.prop(mat.collision_properties, "material_color_index")
 
@@ -113,6 +127,7 @@ class SOLLUMZ_PT_BOUND_SHAPE_PANEL(bpy.types.Panel):
                 grid.prop(shape, "cylinder_length")
             case _:
                 pass
+
 
 class SOLLUMZ_PT_BOUND_FLAGS_PANEL(bpy.types.Panel):
     bl_label = "Composite Flags"
@@ -184,21 +199,15 @@ class SOLLUMZ_UL_COLLISION_MATERIALS_LIST(bpy.types.UIList):
     def draw_item(
         self, context, layout, data, item, icon, active_data, active_propname, index
     ):
-        
         if item.game == SollumzGame.GTA:
             name = collisionmats[item.index].ui_name
         elif item.game == SollumzGame.RDR:
             name = rdr_collisionmats[item.index].ui_name
-        
-        if self.layout_type in {"DEFAULT", "COMPACT"}:
-            row = layout.row()
-            row.label(text=name, icon="MATERIAL")
-            favorite_icon = "SOLO_ON" if item.favorite else "SOLO_OFF"
-            row.prop(item, "favorite", text="", toggle=True, emboss=False, icon=favorite_icon)
-        elif self.layout_type in {"GRID"}:
-            layout.alignment = "CENTER"
-            layout.prop(item, "name",
-                        text=name, emboss=False, icon="MATERIAL")
+
+        row = layout.row()
+        row.label(text=name, icon="MATERIAL")
+        favorite_icon = "SOLO_ON" if item.favorite else "SOLO_OFF"
+        row.prop(item, "favorite", text="", toggle=True, emboss=False, icon=favorite_icon)
 
     def draw_filter(self, context, layout):
         row = layout.row()
@@ -253,19 +262,13 @@ class SOLLUMZ_UL_FLAG_PRESET_LIST(bpy.types.UIList):
     def draw_item(
         self, context, layout, data, item, icon, active_data, active_propname, index
     ):
-
         if item.game == SollumzGame.RDR:
-            tag = "RDR"  
+            tag = "RDR"
         else:
-            tag = "GTA"  
-        
-        if self.layout_type in {"DEFAULT", "COMPACT"}:
+            tag = "GTA"
+
             row = layout.row()
             row.label(text = f"[{tag}] {item.name}", icon="BOOKMARKS")
-        elif self.layout_type in {"GRID"}:
-            layout.alignment = "CENTER"
-            layout.prop(item, "name",
-                        text=f"[{tag}] {item.name}", emboss=False, icon="BOOKMARKS")
 
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
