@@ -17,6 +17,7 @@ from ..sollumz_properties import SollumzGame, import_export_current_game as curr
 class YTYP:
 
     file_extension = ".ytyp.xml"
+    rdr2_file_extension = ".ytyp.rsc.xml"
 
     @staticmethod
     def from_xml_file(filepath):

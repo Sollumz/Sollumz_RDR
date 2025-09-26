@@ -8,7 +8,7 @@ import re
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Matrix, Quaternion
 from .sollumz_helper import SOLLUMZ_OT_base, find_sollumz_parent
-from .sollumz_properties import SollumType, SOLLUMZ_UI_NAMES, BOUND_TYPES, TimeFlagsMixin, ArchetypeType, LODLevel
+from .sollumz_properties import SollumType, SOLLUMZ_UI_NAMES, BOUND_TYPES, TimeFlagsMixin, ArchetypeType, LODLevel, SollumzGame
 from .sollumz_preferences import get_export_settings
 from .cwxml.drawable import YDR, YDD
 from .cwxml.fragment import YFT
@@ -121,8 +121,11 @@ class SOLLUMZ_OT_import_assets(bpy.types.Operator, ImportHelper, TimedOperator):
             # they are imported together
             for filename in ytyp_filenames:
                 filepath = os.path.join(self.directory, filename)
+                game = SollumzGame.GTA
+                if ".rsc" in filepath:
+                    game = SollumzGame.RDR
                 try:
-                    import_ytyp(filepath)
+                    import_ytyp(filepath, game)
                     logger.info(f"Successfully imported '{filepath}'")
                 except:
                     logger.error(f"Error importing: {filepath} \n {traceback.format_exc()}")
@@ -149,7 +152,7 @@ class SOLLUMZ_OT_import_assets(bpy.types.Operator, ImportHelper, TimedOperator):
         """Separate the filenames list into two lists, one with all the assets and another one only with .ytyps."""
         asset_filenames, ytyp_filenames = [], []
         for f in filenames:
-            dest = ytyp_filenames if f.endswith(YTYP.file_extension) else asset_filenames
+            dest = ytyp_filenames if f.endswith(YTYP.file_extension) or f.endswith(YTYP.rdr2_file_extension) else asset_filenames
             dest.append(f)
         return asset_filenames, ytyp_filenames
 
