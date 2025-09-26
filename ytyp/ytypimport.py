@@ -339,7 +339,12 @@ def organize_mlo_entities_in_collections(archetype: ArchetypeProperties):
 def find_and_set_archetype_asset(archetype: ArchetypeProperties):
     """Atempt to find an existing archetype asset in the scene and set it as the current asset."""
 
-    obj = bpy.context.scene.objects.get(archetype.asset_name, None)
+    name = archetype.asset_name
+    if not name and archetype.type == ArchetypeType.MLO:
+        # RDR MLOs have an empty asset name
+        name = archetype.name
+
+    obj = bpy.context.scene.objects.get(archetype.name, None)
     if obj is None:
         return
 
