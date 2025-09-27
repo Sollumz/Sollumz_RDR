@@ -280,8 +280,8 @@ class MaterialConverter:
         for i in range(min(src_count, dst_count)):
             dst_node.set(i, src_node.get(i))
 
-    def convert_shader_to_shader(self, shader_name: str):
-        shader = ShaderManager.find_shader(shader_name)
+    def convert_shader_to_shader(self, shader_name: str, game: SollumzGame):
+        shader = ShaderManager.find_shader(shader_name, game)
         assert shader is not None
 
         for param in shader.parameters:
@@ -581,13 +581,13 @@ class SOLLUMZ_OT_create_shader_material(SOLLUMZ_OT_base, bpy.types.Operator):
 
     shader_index: IntProperty(name="Shader Index", min=0, max=len(shadermats) - 1)
 
-    def create_material(self, context, obj, shader_filename):
+    def create_material(self, context, obj, shader_filename, game):
         if obj.type != "MESH":
             self.warning(f"Object {obj.name} is not a mesh and will be skipped.")
             return
 
         mesh = obj.data
-        mat = create_shader(shader_filename)
+        mat = create_shader(shader_filename, game)
         mesh.materials.append(mat)
         post_create_shader_add_default_images(mat)
         post_create_shader_update_object(obj, mat)
@@ -607,7 +607,7 @@ class SOLLUMZ_OT_create_shader_material(SOLLUMZ_OT_base, bpy.types.Operator):
         shader_filename = materials[self.shader_index].value
         for obj in objs:
             try:
-                self.create_material(context, obj, shader_filename, sollum_game_type)
+                m = self.create_material(context, obj, shader_filename, sollum_game_type)
             except:
                 self.message(f"Failed adding {shader_filename} to {obj.name} because : \n {traceback.format_exc()}")
 
