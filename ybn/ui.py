@@ -267,8 +267,8 @@ class SOLLUMZ_UL_FLAG_PRESET_LIST(bpy.types.UIList):
         else:
             tag = "GTA"
 
-            row = layout.row()
-            row.label(text = f"[{tag}] {item.name}", icon="BOOKMARKS")
+        row = layout.row()
+        row.label(text = f"[{tag}] {item.name}", icon="BOOKMARKS")
 
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
