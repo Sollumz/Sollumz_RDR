@@ -524,6 +524,19 @@ def updateSceneSollumzGame(self, context):
     context.scene.sollum_shader_game_type = context.scene.sollum_game_type
     context.scene.sollum_collision_material_game_type = context.scene.sollum_game_type
 
+def updatePalIndex(self, context):
+    pal_tex = context.scene.pal_texture
+    if not pal_tex:
+        return
+    width = pal_tex.size[0]
+    i = context.scene.pal_index
+    if i < 0 or i >= width:
+        return
+    color = (pal_tex.pixels[i*4+0], pal_tex.pixels[i*4+1], pal_tex.pixels[i*4+2])
+    context.scene.pal_color = color
+    context.scene.pal_number = f"{(i / (width - 1)):.5f}"
+
+
 def register():
     bpy.types.Object.sollum_game_type = bpy.props.EnumProperty(
         items=items_from_enums(SollumzGame),
@@ -618,6 +631,36 @@ def register():
         min=0,
         max=1,
         size=4
+    )
+
+    bpy.types.Scene.pal_texture = bpy.props.PointerProperty(
+        name="Pal Texture",
+        type=bpy.types.Image,
+        update=updatePalIndex
+    )
+
+    bpy.types.Scene.pal_index = bpy.props.IntProperty(
+        name="Pal Index",
+        description="Change this value to iterate through all possible Colors of this Pal Texture.",
+        default=0,
+        min=0,
+        max=255,
+        update=updatePalIndex
+    )
+
+    bpy.types.Scene.pal_color = bpy.props.FloatVectorProperty(
+        name="Pal Color",
+        description="Just a preview of the choosen pal color",
+        subtype='COLOR',
+        size=3,
+        default=(0.0, 0.0, 0.0),
+        min=0.0, max=1.0
+    )
+
+    bpy.types.Scene.pal_number = bpy.props.StringProperty(
+        name="Color Number",
+        description="Copy this value and use it as your pal color for vertex painting.",
+        default="0.0"
     )
 
     bpy.types.Scene.all_sollum_type = bpy.props.EnumProperty(

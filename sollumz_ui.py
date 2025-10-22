@@ -471,6 +471,33 @@ class SOLLUMZ_PT_EXPORT_PATH_PANEL(GeneralToolChildPanel, bpy.types.Panel):
         self.layout.prop(context.scene, "sollumz_export_path", text="")
 
 
+class SOLLUMZ_PT_PAL_HELPER_PANEL(GeneralToolChildPanel, bpy.types.Panel):
+    bl_label = "Pal Color Helper"
+    bl_idname = "SOLLUMZ_PT_PAL_HELPER_PANEL"
+    bl_parent_id = SOLLUMZ_PT_VERTEX_TOOL_PANEL.bl_idname
+    bl_order = 1
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon="COLOR")
+
+    def draw(self, context):
+        layout = self.layout
+
+        pal = layout.column()
+        pal.label(text="Pal Texture:")
+        pal.template_ID(context.scene, "pal_texture", open="image.open")
+
+        pal_tex = context.scene.pal_texture
+        if not pal_tex:
+            return
+
+        index_color = layout.split(factor=0.5)
+        index_color.prop(context.scene, "pal_index", text="Index")
+        index_color.prop(context.scene, "pal_color", text="")
+        num = layout.row()
+        num.prop(context.scene, "pal_number")
+
+
 class SOLLUMZ_PT_OBJECT_PANEL(bpy.types.Panel):
     bl_label = "Sollumz"
     bl_idname = "SOLLUMZ_PT_MAIN_PANEL"
