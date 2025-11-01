@@ -298,15 +298,19 @@ def is_non_color_texture(shader_filename: str, param_name: str):
 def shader_item_to_material(shader: Shader, shader_group: ShaderGroup, filepath: str):
     texture_folder = Path(os.path.dirname(filepath) + "\\" + os.path.basename(filepath)[:-8])
 
-
-
-
     material = None
     hasTint = False
     if current_game() == SollumzGame.GTA:
         filename = shader.filename
         if not filename:
             filename = f"{shader.name}.sps"
+
+        # Fix for importing gen9 assets using ped_decal_exp shader. Gen9 doesn't have preset files so CW just appends
+        # .sps to the shader name, which most of the time is correct, but for ped_decal_exp the preset file was
+        # ped_decal_expensive.sps and that's what we have in our shader definitions. Normalize the naming here.
+        if filename == "hash_1A87324E" or filename == "ped_decal_exp.sps":
+            filename = "ped_decal_expensive.sps"
+
         material = create_shader(filename, current_game())
         material.shader_properties.renderbucket = RenderBucket(shader.render_bucket).name
     elif current_game() == SollumzGame.RDR:
