@@ -244,8 +244,7 @@ def create_tint_geom_modifier(
 
     # set input / output variables
     input_id = tnt_ng.interface.items_tree["Color Attribute"].identifier
-    mod[input_id + "_attribute_name"] = input_color_attr_name if input_color_attr_name is not None else ""
-    mod[input_id + "_use_attribute"] = True
+    mod[input_id] = input_color_attr_name if input_color_attr_name is not None else ""
 
     input_palette_id = tnt_ng.interface.items_tree["Palette Texture"].identifier
     mod[input_palette_id] = palette_img
@@ -298,7 +297,7 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     # Create the necessary sockets for the node group
     gnt.interface.new_socket("Geometry", socket_type="NodeSocketGeometry", in_out="INPUT")
     gnt.interface.new_socket("Geometry", socket_type="NodeSocketGeometry", in_out="OUTPUT")
-    gnt.interface.new_socket("Color Attribute", socket_type="NodeSocketVector", in_out="INPUT")
+    gnt.interface.new_socket("Color Attribute", socket_type="NodeSocketString", in_out="INPUT")
     in_palette = gnt.interface.new_socket("Palette W (Preview)",
                                           description="Index of the tint palette to preview. Has no effect on export",
                                           socket_type="NodeSocketInt", in_out="INPUT")
@@ -307,7 +306,6 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
                                           description="Index of the tint palette to preview. Has no effect on export",
                                           socket_type="NodeSocketInt", in_out="INPUT")
     in_palette2.min_value = 0
-   
     gnt.interface.new_socket("Palette Texture", description="Should be the same as 'TintPaletteSampler' of the material",
                              socket_type="NodeSocketImage", in_out="INPUT")
     gnt.interface.new_socket("Tint Color", socket_type="NodeSocketColor", in_out="OUTPUT")
@@ -315,13 +313,13 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     # link input / output node to create geometry socket
     cptn = gnt.nodes.new("GeometryNodeCaptureAttribute")
     cptn.domain = "CORNER"
-
     if bpy.app.version >= (4, 2, 0):
-        cpt_attr = cptn.capture_items.new("RGBA", "Color")
-        cpt_attr.data_type = "FLOAT_COLOR"
+        cpt_name = "UV"
+        cpt_attr = cptn.capture_items.new("VECTOR", cpt_name)
+        cpt_attr.data_type = "FLOAT_VECTOR"
     else:
-        cptn.data_type = "FLOAT_COLOR"
-        
+        cpt_name = "Attribute"
+        cptn.data_type = "FLOAT_VECTOR"
     gnt.links.new(input.outputs["Geometry"], cptn.inputs["Geometry"])
     gnt.links.new(cptn.outputs["Geometry"], output.inputs["Geometry"])
 
@@ -329,12 +327,44 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     txtn = gnt.nodes.new("GeometryNodeImageTexture")
     txtn.interpolation = "Closest"
     gnt.links.new(input.outputs["Palette Texture"], txtn.inputs["Image"])
-    gnt.links.new(cptn.outputs["Attribute"], txtn.inputs["Vector"])
+    gnt.links.new(cptn.outputs[cpt_name], txtn.inputs["Vector"])
     gnt.links.new(txtn.outputs["Color"], output.inputs["Tint Color"])
+
+    pal_img_info = gnt.nodes.new("GeometryNodeImageInfo")
+    gnt.links.new(input.outputs["Palette Texture"], pal_img_info.inputs["Image"])
+
+    # Read color attribute. We check if there is an isolated attribute for the input color attribute. If so, we
+    # read from the isolated attribute instead of the input, so the tint updates as the user paints.
+    from ..editor_tools.vertex_paint.isolate import ISOLATED_ATTR_FORMAT
+    color_attr = gnt.nodes.new("GeometryNodeInputNamedAttribute")
+    color_attr.data_type = "FLOAT_COLOR"
+    gnt.links.new(input.outputs["Color Attribute"], color_attr.inputs["Name"])
+    last_color_output = color_attr.outputs["Attribute"]
+    for r, g, b in (
+        # All possible isolation states with blue channel. Note: alpha cannot be isolated along with RGB, we can ignore it
+        ("", "", "B"),
+        ("", "G", "B"),
+        ("R", "", "B"),
+        ("R", "G", "B"),
+    ):
+        isolated_attr_prefix = gnt.nodes.new("FunctionNodeInputString")
+        isolated_attr_prefix.string = ISOLATED_ATTR_FORMAT.format(r, g, b, "", "")
+        str_join = gnt.nodes.new("GeometryNodeStringJoin")
+        isolated_attr = gnt.nodes.new("GeometryNodeInputNamedAttribute")
+        isolated_attr.data_type = "FLOAT_COLOR"
+        switch = gnt.nodes.new("GeometryNodeSwitch")
+        switch.input_type = "RGBA"
+        gnt.links.new(input.outputs["Color Attribute"], str_join.inputs["Strings"])
+        gnt.links.new(isolated_attr_prefix.outputs["String"], str_join.inputs["Strings"])
+        gnt.links.new(str_join.outputs["String"], isolated_attr.inputs["Name"])
+        gnt.links.new(isolated_attr.outputs["Exists"], switch.inputs["Switch"])
+        gnt.links.new(isolated_attr.outputs["Attribute"], switch.inputs["True"])
+        gnt.links.new(last_color_output, switch.inputs["False"])
+        last_color_output = switch.outputs["Output"]
 
     # separate colour0
     sepn = gnt.nodes.new("ShaderNodeSeparateXYZ")
-    gnt.links.new(input.outputs["Color Attribute"], sepn.inputs["Vector"])
+    gnt.links.new(last_color_output, sepn.inputs["Vector"])
 
     # create math nodes
     mathns = []
@@ -346,7 +376,10 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     # c1
     mathns[0].operation = "LESS_THAN"
     gnt.links.new(sepn.outputs[2], mathns[0].inputs[0])
-    mathns[0].inputs[1].default_value = 0.003
+    # NOTE: the correct constant here should be 0.0031308 but the loss of precision due to the linear->sRGB conversion
+    #       causes it not to recover the correct UV.x value on some pixels, sampling neighboring pixels. With 0.004, it
+    #       works better in our specific case (UVs for pixels between 0-256) and seems to work for all palette pixels.
+    mathns[0].inputs[1].default_value = 0.004
     mathns[1].operation = "SUBTRACT"
     gnt.links.new(mathns[0].outputs[0], mathns[1].inputs[1])
     mathns[1].inputs[0].default_value = 1.0
@@ -384,7 +417,6 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     pal_add = gnt.nodes.new("ShaderNodeMath")
     pal_add.operation = "ADD"
     pal_add.inputs[1].default_value = 0.5
-    pal_img_info = gnt.nodes.new("GeometryNodeImageInfo")
     pal_div = gnt.nodes.new("ShaderNodeMath")
     pal_div.operation = "DIVIDE"
     pal_flip_uv_sub = gnt.nodes.new("ShaderNodeMath")
@@ -394,7 +426,6 @@ def create_tinted_geometry_graph():  # move to blenderhelper.py?
     pal_flip_uv_mult.operation = "MULTIPLY"
     pal_flip_uv_mult.inputs[1].default_value = -1.0
 
-    gnt.links.new(input.outputs["Palette Texture"], pal_img_info.inputs["Image"])
     gnt.links.new(input.outputs["Palette H (Preview)"], pal_add.inputs[1])
     gnt.links.new(pal_add.outputs[0], pal_div.inputs[0])
     gnt.links.new(pal_img_info.outputs["Height"], pal_div.inputs[1])
