@@ -74,7 +74,7 @@ class MaterialType(str, Enum):
     SHADER_RDR = "sollumz_material_shader_rdr"
     COLLISION = "sollumz_material_collision"
     COLLISION_RDR = "sollumz_material_collision_rdr"
-    SHATTER_MAP = "sollumz_material_shard"
+    DEPRECATED__SHATTER_MAP = "sollumz_material_shard"  # unused
 
 
 class LODLevel(str, Enum):
@@ -311,7 +311,7 @@ SOLLUMZ_UI_NAMES = {
     MaterialType.NONE: "None",
     MaterialType.SHADER: "Sollumz Material",
     MaterialType.COLLISION: "Sollumz Collision Material",
-    MaterialType.SHATTER_MAP: "Sollumz Shatter Map",
+    MaterialType.DEPRECATED__SHATTER_MAP: "Sollumz Shatter Map",
     MaterialType.SHADER_RDR: "Sollumz RDR Material",
     MaterialType.COLLISION_RDR: "Sollumz RDR Collision Material",
 
