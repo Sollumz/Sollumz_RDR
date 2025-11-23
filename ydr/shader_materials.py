@@ -556,7 +556,7 @@ def create_shader(filename: str, game: SollumzGame = SollumzGame.GTA, in_place_m
     base_name = shader.base_name
     material_name = filename.replace(".sps", "")
 
-    if in_place_material and in_place_material.use_nodes:
+    if in_place_material and (in_place_material.use_nodes if bpy.app.version < (5, 0, 0) else True):
         # If creating the shader in an existing material, setup the node tree to its default state
         current_node_tree = in_place_material.node_tree
         current_node_tree.nodes.clear()
@@ -577,7 +577,8 @@ def create_shader(filename: str, game: SollumzGame = SollumzGame.GTA, in_place_m
     mat = in_place_material or bpy.data.materials.new(material_name)
     mat.sollum_type = MaterialType.SHADER
     mat.sollum_game_type = game
-    mat.use_nodes = True
+    if bpy.app.version < (5, 0, 0):
+        mat.use_nodes = True
     mat.shader_properties.name = base_name
     mat.shader_properties.filename = filename
     if game == SollumzGame.GTA:
