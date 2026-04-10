@@ -96,7 +96,7 @@ class SOLLUMZ_PT_ROOM_PANEL(MloChildTabPanel, bpy.types.Panel):
 
         layout.separator()
         for prop_name in RoomProperties.__annotations__:
-            if prop_name in ["flags", "id", "uuid"]:
+            if prop_name in ["flags", "id", "uuid", "reflection_probes", "reflection_probes_active_index"]:
                 continue
             layout.prop(selection.owner, getattr(selection.propnames, prop_name))
 
@@ -143,6 +143,61 @@ class SOLLUMZ_PT_ROOM_FLAGS_PANEL(MultiSelectUIFlagsPanel, bpy.types.Panel):
         self.layout.enabled = not ytyp.archetypes.has_multiple_selection
         super().draw(context)
 
+class SOLLUMZ_PT_REFLECTION_PROBE_PANEL(bpy.types.Panel):
+    bl_idname = "SOLLUMZ_PT_REFLECTION_PROBE_PANEL"
+    bl_label = "Reflection Probes"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_parent_id = SOLLUMZ_PT_ROOM_PANEL.bl_idname
+    bl_category = SOLLUMZ_PT_ROOM_PANEL.bl_category
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 1
+
+    @classmethod
+    def poll(cls, context):
+        return get_selected_room(context) is not None
+
+    def draw(self, context):
+        layout = self.layout
+        # TODO(multiselect): think how we should manage disabling panels when multiple selection enabled
+        ytyp = get_selected_ytyp(context)
+        layout.enabled = not ytyp.archetypes.has_multiple_selection
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        
+        selected_room = get_selected_room(context)
+        
+        row = layout.row()
+        col = row.column()
+        col.template_list(
+            SOLLUMZ_UL_REFLECTION_PROBE_LIST.bl_idname, "",
+            selected_room, "reflection_probes",
+            selected_room, "reflection_probes_active_index",
+            rows=3
+        )
+        
+        side_col = row.column(align=True)
+        side_col.operator("sollumz.createreflectionprobe", text="", icon="ADD")
+        side_col.operator("sollumz.deletereflectionprobe", text="", icon="REMOVE")
+
+        col.operator("sollumz.setreflectionprobeextentsfromselection", icon="GROUP_VERTEX")
+        col.operator("sollumz.setreflectionprobeinfluencefromselection", icon="SHADING_RENDERED")
+
+        row = layout.row()
+        row.use_property_split = False
+        row.prop(context.scene, "show_probe_gizmo")
+
+        if selected_room.reflection_probes_active_index >= 0 and selected_room.reflection_probes_active_index < len(selected_room.reflection_probes):
+            layout.separator()
+            active_probe = selected_room.reflection_probes[selected_room.reflection_probes_active_index]
+            layout.prop(active_probe, "min_extents")
+            layout.prop(active_probe, "max_extents")
+            layout.prop(active_probe, "rotation")
+            layout.prop(active_probe, "center_offset")
+            layout.prop(active_probe, "influence_extents")
+            layout.prop(active_probe, "probe_priority")
+            layout.prop(active_probe, "guid")
+
 
 class SOLLUMZ_UL_PORTAL_LIST(MultiSelectUIListMixin, bpy.types.UIList):
     bl_idname = "SOLLUMZ_UL_PORTAL_LIST"
@@ -159,6 +214,13 @@ class SOLLUMZ_UL_PORTAL_LIST(MultiSelectUIListMixin, bpy.types.UIList):
         collection = getattr(data, multiselect_collection_name)
         from ...shared.multiselection import _default_filter_items
         return _default_filter_items(collection, self.filter_name, self.use_filter_sort_reverse, self.use_filter_sort_alpha)
+
+
+class SOLLUMZ_UL_REFLECTION_PROBE_LIST(bpy.types.UIList):
+    bl_idname = "SOLLUMZ_UL_REFLECTION_PROBE_LIST"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout.prop(item, "name", text="", icon="SPHERE", emboss=False)
 
 
 class SOLLUMZ_PT_PORTAL_PANEL(MloChildTabPanel, bpy.types.Panel):

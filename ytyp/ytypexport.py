@@ -148,6 +148,18 @@ def create_room_xml(room: RoomProperties, room_index: int, archetype: ArchetypeP
     set_room_attached_objects(room_xml, room_index,
                               archetype.non_entity_set_entities)
 
+    # Export reflection probes
+    for probe in room.reflection_probes:
+        probe_xml = ytypxml.ReflectionProbe()
+        probe_xml.min_extents = probe.min_extents
+        probe_xml.max_extents = probe.max_extents
+        probe_xml.rotation = probe.rotation
+        probe_xml.center_offset = probe.center_offset
+        probe_xml.influence_extents = probe.influence_extents
+        probe_xml.probe_priority = probe.probe_priority
+        probe_xml.guid = probe.guid
+        room_xml.reflection_probes.append(probe_xml)
+
     return room_xml
 
 

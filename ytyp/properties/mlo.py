@@ -109,6 +109,17 @@ class MloArchetypeChild:
     mlo_archetype_uuid: bpy.props.StringProperty(name="Archetype UUID", maxlen=36)
 
 
+class ReflectionProbeProperties(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Name", default="Probe")
+    min_extents: bpy.props.FloatVectorProperty(name="Min Extents", subtype="XYZ")
+    max_extents: bpy.props.FloatVectorProperty(name="Max Extents", subtype="XYZ")
+    rotation: bpy.props.FloatVectorProperty(name="Rotation", subtype="QUATERNION", size=4, default=(1, 0, 0, 0))
+    center_offset: bpy.props.FloatVectorProperty(name="Center Offset", subtype="XYZ")
+    influence_extents: bpy.props.FloatVectorProperty(name="Influence Extents", subtype="XYZ", default=(1, 1, 1))
+    probe_priority: bpy.props.IntProperty(name="Probe Priority", default=255, min=0, max=255)
+    guid: bpy.props.StringProperty(name="GUID", default="0")
+
+
 class RoomProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     name: bpy.props.StringProperty(name="Name", update=MloArchetypeChild.update_mlo_archetype_caches)
     bb_min: bpy.props.FloatVectorProperty(name="Bounds Min", subtype="XYZ")
@@ -119,6 +130,8 @@ class RoomProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     flags: bpy.props.PointerProperty(type=RoomFlags, name="Flags")
     floor_id: bpy.props.IntProperty(name="Floor ID")
     exterior_visibility_depth: bpy.props.IntProperty(name="Exterior Visibility Depth", default=-1)
+    reflection_probes: bpy.props.CollectionProperty(type=ReflectionProbeProperties, name="Reflection Probes")
+    reflection_probes_active_index: bpy.props.IntProperty(name="Reflection Probes Active Index", default=0, min=0)
 
     # Blender usage only
     id: bpy.props.IntProperty(name="Id")

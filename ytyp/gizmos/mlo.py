@@ -1,8 +1,8 @@
 import bpy
 from ...sollumz_properties import ArchetypeType
 from ...sollumz_preferences import get_theme_settings
-from mathutils import Vector, Matrix
-from ..utils import get_selected_archetype, get_selected_ytyp, get_selected_portal, get_selected_tcm
+from mathutils import Vector, Matrix, Quaternion
+from ..utils import get_selected_archetype, get_selected_ytyp, get_selected_portal, get_selected_tcm, get_selected_probe, get_selected_room
 from ...tools.blenderhelper import find_parent
 
 
@@ -344,3 +344,264 @@ class TimecycleModifierGizmoGroup(bpy.types.GizmoGroup):
         for tcm in selected_archetype.timecycle_modifiers:
             gz = self.gizmos.new(TimecycleModifierGizmo.bl_idname)
             gz.linked_tcm = tcm
+
+
+class ProbeGizmo(bpy.types.Gizmo):
+    bl_idname = "OBJECT_GT_probe"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.linked_probe = None
+
+    @staticmethod
+    def get_verts(bbmin, bbmax):
+        return [
+            bbmin,
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+            bbmin,
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+            bbmin,
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            bbmax,
+
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+            bbmax,
+
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+            bbmax
+        ]
+
+    def draw(self, context):
+        theme = get_theme_settings(context)
+        selected_probe = get_selected_probe(context)
+        probe = self.linked_probe
+
+        self.use_draw_scale = False
+
+        if probe == selected_probe:
+            r, g, b, a = theme.mlo_gizmo_probe_selected
+        else:
+            r, g, b, a = theme.mlo_gizmo_probe
+
+        self.color = r, g, b
+        self.alpha = a
+
+        selected_archetype = get_selected_archetype(context)
+        asset = selected_archetype.asset
+        if asset and probe:
+            # Rotate around the center of the probe bounds
+            center = (Vector(probe.min_extents) + Vector(probe.max_extents)) / 2
+            quat = Quaternion(probe.rotation)  # WXYZ format
+            
+            # Convert quaternion to Euler angles with ZYX order to avoid gimbal lock
+            euler = quat.to_euler('ZYX')
+            rot_matrix = euler.to_matrix().to_4x4()
+            
+            # Translate to center, rotate, translate back to center
+            probe_matrix = (
+                asset.matrix_world @
+                Matrix.Translation(center) @
+                rot_matrix @
+                Matrix.Translation(-center)
+            )
+            
+            self.custom_shape = self.new_custom_shape(
+                "LINES", ProbeGizmo.get_verts(probe.min_extents, probe.max_extents))
+            self.draw_custom_shape(
+                self.custom_shape, matrix=probe_matrix)
+
+
+class ProbeCenterGizmo(bpy.types.Gizmo):
+    bl_idname = "OBJECT_GT_probe_center"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.linked_probe = None
+        self.linked_room = None
+
+    def draw(self, context):
+        self.draw_select(context)
+
+    def draw_select(self, context, select_id=None):
+        theme = get_theme_settings(context)
+        selected_probe = get_selected_probe(context)
+        probe = self.linked_probe
+        room = self.linked_room
+        asset = get_selected_archetype(context).asset
+
+        if selected_probe == probe:
+            r, g, b, a = theme.mlo_gizmo_probe_selected
+        else:
+            r, g, b, a = theme.mlo_gizmo_probe
+
+        self.color = r, g, b
+        self.alpha = a
+
+        if probe and asset and room:
+            select_id = select_id if select_id is not None else -1
+            # Position = room center + probe center_offset
+            room_center = (room.bb_min + room.bb_max) / 2
+            probe_position = room_center + probe.center_offset
+            t = asset.matrix_world @ Matrix.Translation(probe_position)
+            # Use a small radius for the sphere (0.25 units)
+            m = t @ Matrix.Scale(0.25, 4)
+            self.draw_preset_circle(m, axis="POS_X", select_id=select_id)
+            self.draw_preset_circle(m, axis="POS_Y", select_id=select_id)
+            self.draw_preset_circle(m, axis="POS_Z", select_id=select_id)
+
+
+class ProbeInfluenceGizmo(bpy.types.Gizmo):
+    bl_idname = "OBJECT_GT_probe_influence"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.linked_probe = None
+        self.linked_room = None
+
+    @staticmethod
+    def get_verts(bbmin, bbmax):
+        return [
+            bbmin,
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+            bbmin,
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+            bbmin,
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmin.z)),
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmin.x, bbmax.y, bbmin.z)),
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+            Vector((bbmax.x, bbmin.y, bbmax.z)),
+            bbmax,
+
+            Vector((bbmin.x, bbmax.y, bbmax.z)),
+            bbmax,
+
+            Vector((bbmax.x, bbmax.y, bbmin.z)),
+            bbmax
+        ]
+
+    def draw(self, context):
+        theme = get_theme_settings(context)
+        selected_probe = get_selected_probe(context)
+        probe = self.linked_probe
+        room = self.linked_room
+
+        self.use_draw_scale = False
+
+        if probe == selected_probe:
+            r, g, b, a = theme.mlo_gizmo_probe_selected
+            self.alpha = a * 0.4  # Reduced alpha to show it's influence zone
+        else:
+            r, g, b, a = theme.mlo_gizmo_probe
+            self.alpha = a * 0.3  # Reduced alpha to show it's influence zone
+
+        self.color = r, g, b
+
+        selected_archetype = get_selected_archetype(context)
+        asset = selected_archetype.asset
+        if asset and probe and room:
+            # Create a symmetric box around the probe center based on influence_extents
+            influence = Vector(probe.influence_extents)
+            half_influence = influence / 2
+            bbmin = -half_influence
+            bbmax = half_influence
+            
+            # Translate to probe position (room center + center_offset)
+            room_center = (room.bb_min + room.bb_max) / 2
+            probe_position = room_center + probe.center_offset
+            
+            # Apply rotation around the probe position
+            quat = Quaternion(probe.rotation)  # WXYZ format
+            
+            # Convert quaternion to Euler angles with ZYX order to avoid gimbal lock
+            euler = quat.to_euler('ZYX')
+            rot_matrix = euler.to_matrix().to_4x4()
+            
+            # Translate then rotate (box is already centered)
+            probe_matrix = asset.matrix_world @ Matrix.Translation(probe_position) @ rot_matrix
+            
+            self.custom_shape = self.new_custom_shape(
+                "LINES", ProbeInfluenceGizmo.get_verts(bbmin, bbmax))
+            self.draw_custom_shape(
+                self.custom_shape, matrix=probe_matrix)
+
+
+class ProbeGizmoGroup(bpy.types.GizmoGroup):
+    bl_idname = "OBJECT_GGT_Probe"
+    bl_label = "MLO Reflection Probe"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "WINDOW"
+    bl_options = {"3D", "PERSISTENT"}
+
+    @classmethod
+    def poll(cls, context):
+        if not context.scene.show_probe_gizmo:
+            return False
+        if can_draw_gizmos(context):
+            room = get_selected_room(context)
+            if room and hasattr(room, 'reflection_probes'):
+                return room.reflection_probes_active_index < len(room.reflection_probes)
+        return False
+
+    def setup(self, context):
+        pass
+
+    def draw_prepare(self, context):
+        room = get_selected_room(context)
+        self.gizmos.clear()
+        if room and hasattr(room, 'reflection_probes'):
+            for probe in room.reflection_probes:
+                gz = self.gizmos.new(ProbeGizmo.bl_idname)
+                gz.linked_probe = probe
+                cgz = self.gizmos.new(ProbeCenterGizmo.bl_idname)
+                cgz.linked_probe = probe
+                cgz.linked_room = room
+                igz = self.gizmos.new(ProbeInfluenceGizmo.bl_idname)
+                igz.linked_probe = probe
+                igz.linked_room = room

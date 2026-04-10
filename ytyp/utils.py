@@ -30,6 +30,15 @@ def get_selected_room(context) -> Union[RoomProperties, None]:
             return archetype.selected_room
 
 
+def get_selected_probe(context):
+    """Get the currently selected reflection probe from the selected room."""
+    room = get_selected_room(context)
+    if room and hasattr(room, 'reflection_probes'):
+        if room.reflection_probes_active_index >= 0 and room.reflection_probes_active_index < len(room.reflection_probes):
+            return room.reflection_probes[room.reflection_probes_active_index]
+    return None
+
+
 def get_selected_portal(context) -> Union[PortalProperties, None]:
     ytyp = get_selected_ytyp(context)
     if ytyp:
