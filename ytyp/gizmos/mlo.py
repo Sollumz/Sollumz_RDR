@@ -352,6 +352,7 @@ class ProbeGizmo(bpy.types.Gizmo):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.linked_probe = None
+        self.linked_room = None
 
     @staticmethod
     def get_verts(bbmin, bbmax):
@@ -400,6 +401,7 @@ class ProbeGizmo(bpy.types.Gizmo):
         theme = get_theme_settings(context)
         selected_probe = get_selected_probe(context)
         probe = self.linked_probe
+        room = self.linked_room
 
         self.use_draw_scale = False
 
@@ -413,25 +415,43 @@ class ProbeGizmo(bpy.types.Gizmo):
 
         selected_archetype = get_selected_archetype(context)
         asset = selected_archetype.asset
-        if asset and probe:
-            # Rotate around the center of the probe bounds
-            center = (Vector(probe.min_extents) + Vector(probe.max_extents)) / 2
+        if asset and probe and room:
+            # Get min/max as vectors
+            extents_min = Vector(probe.min_extents)
+            extents_max = Vector(probe.max_extents)
+            
+            # Ensure we have actual min and max in each dimension
+            actual_min = Vector((
+                min(extents_min.x, extents_max.x),
+                min(extents_min.y, extents_max.y),
+                min(extents_min.z, extents_max.z)
+            ))
+            actual_max = Vector((
+                max(extents_min.x, extents_max.x),
+                max(extents_min.y, extents_max.y),
+                max(extents_min.z, extents_max.z)
+            ))
+            
+            # Translate to probe position (room center + center_offset)
+            room_center = (room.bb_min + room.bb_max) / 2
+            probe_position = room_center + probe.center_offset
+            
+            # Apply rotation 
             quat = Quaternion(probe.rotation)  # WXYZ format
             
             # Convert quaternion to Euler angles with ZYX order to avoid gimbal lock
             euler = quat.to_euler('ZYX')
             rot_matrix = euler.to_matrix().to_4x4()
             
-            # Translate to center, rotate, translate back to center
+            # Translate to probe position, then rotate
             probe_matrix = (
                 asset.matrix_world @
-                Matrix.Translation(center) @
-                rot_matrix @
-                Matrix.Translation(-center)
+                Matrix.Translation(probe_position) @
+                rot_matrix
             )
             
             self.custom_shape = self.new_custom_shape(
-                "LINES", ProbeGizmo.get_verts(probe.min_extents, probe.max_extents))
+                "LINES", ProbeGizmo.get_verts(actual_min, actual_max))
             self.draw_custom_shape(
                 self.custom_shape, matrix=probe_matrix)
 
@@ -599,6 +619,7 @@ class ProbeGizmoGroup(bpy.types.GizmoGroup):
             for probe in room.reflection_probes:
                 gz = self.gizmos.new(ProbeGizmo.bl_idname)
                 gz.linked_probe = probe
+                gz.linked_room = room
                 cgz = self.gizmos.new(ProbeCenterGizmo.bl_idname)
                 cgz.linked_probe = probe
                 cgz.linked_room = room

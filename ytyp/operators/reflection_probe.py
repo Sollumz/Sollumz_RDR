@@ -1,5 +1,6 @@
 import bpy
 import random
+from mathutils import Vector
 from ...sollumz_operators import SOLLUMZ_OT_base
 from ...sollumz_properties import ArchetypeType
 from ...tools.meshhelper import get_min_vector_list, get_max_vector_list
@@ -103,10 +104,13 @@ class SOLLUMZ_OT_set_reflection_probe_extents_from_selection(SOLLUMZ_OT_base, bp
             self.message("You must set an asset for the archetype.")
             return False
 
-        pos = selected_archetype.asset.location
+        # Calculate the probe origin: asset location + room center + center offset
+        asset_pos = Vector(selected_archetype.asset.location)
+        room_center = (selected_room.bb_min + selected_room.bb_max) / 2
+        probe_origin = asset_pos + room_center + selected_probe.center_offset
 
-        selected_probe.max_extents = get_max_vector_list(selected_verts) - pos
-        selected_probe.min_extents = get_min_vector_list(selected_verts) - pos
+        selected_probe.max_extents = get_max_vector_list(selected_verts) - probe_origin
+        selected_probe.min_extents = get_min_vector_list(selected_verts) - probe_origin
 
         return True
 
