@@ -2,9 +2,9 @@ import bpy
 import random
 from ...sollumz_operators import SOLLUMZ_OT_base
 from ...sollumz_properties import ArchetypeType
-from ...tools.meshhelper import get_extents, get_min_vector_list, get_max_vector_list
+from ...tools.meshhelper import get_min_vector_list, get_max_vector_list
 from ...tools.blenderhelper import get_selected_vertices
-from ..utils import get_selected_archetype, get_selected_room, validate_dynamic_enum
+from ..utils import get_selected_archetype, get_selected_room
 
 
 class SOLLUMZ_OT_create_reflection_probe(SOLLUMZ_OT_base, bpy.types.Operator):
