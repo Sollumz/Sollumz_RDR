@@ -14,7 +14,7 @@ from ...sollumz_preferences import get_addon_preferences
 from ...tools.blenderhelper import get_children_recursive, tag_redraw
 from ...sollumz_properties import SollumType, items_from_enums, ArchetypeType, AssetType, TimeFlagsMixin, SOLLUMZ_UI_NAMES, SollumzGame, MapEntityType
 from ...tools.utils import get_list_item
-from .mlo import EntitySetProperties, RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties, ReflectionProbeProperties
+from .mlo import EntitySetProperties, RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties
 from .flags import ArchetypeFlags, MloFlags
 from .extensions import ExtensionsContainer, ExtensionType
 from ...shared.multiselection import (
