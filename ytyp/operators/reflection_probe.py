@@ -1,11 +1,10 @@
 import bpy
-import random
 from mathutils import Vector
 from ...sollumz_operators import SOLLUMZ_OT_base
 from ...sollumz_properties import ArchetypeType
 from ...tools.meshhelper import get_min_vector_list, get_max_vector_list
 from ...tools.blenderhelper import get_selected_vertices
-from ..utils import get_selected_archetype, get_selected_room
+from ..utils import get_selected_archetype, get_selected_room, get_active_probe_with_validation
 
 
 class SOLLUMZ_OT_create_reflection_probe(SOLLUMZ_OT_base, bpy.types.Operator):
@@ -26,8 +25,12 @@ class SOLLUMZ_OT_create_reflection_probe(SOLLUMZ_OT_base, bpy.types.Operator):
         room = selected_archetype.selected_room
         probe = room.reflection_probes.add()
         probe.name = f"Probe.{len(room.reflection_probes)}"
-        # Generate a random 64-bit hex GUID
-        probe.guid = f"0x{random.getrandbits(64):X}"
+        
+        # Trigger viewport redraw for gizmo update
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        
         return True
 
 
@@ -63,6 +66,11 @@ class SOLLUMZ_OT_delete_reflection_probe(SOLLUMZ_OT_base, bpy.types.Operator):
         if len(room.reflection_probes) > 0:
             room.reflection_probes_active_index = min(new_index, len(room.reflection_probes) - 1)
         
+        # Trigger viewport redraw for gizmo update
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        
         return True
 
 
@@ -83,14 +91,12 @@ class SOLLUMZ_OT_set_reflection_probe_extents_from_selection(SOLLUMZ_OT_base, bp
         )
 
     def run(self, context):
-        selected_archetype = get_selected_archetype(context)
-        selected_room = get_selected_room(context)
-        
-        if selected_room.reflection_probes_active_index >= len(selected_room.reflection_probes):
+        result = get_active_probe_with_validation(context)
+        if not result:
             self.message("No active reflection probe!")
             return False
         
-        selected_probe = selected_room.reflection_probes[selected_room.reflection_probes_active_index]
+        selected_archetype, selected_room, selected_probe = result
         
         selected_verts = []
         for obj in context.objects_in_mode:
@@ -132,14 +138,12 @@ class SOLLUMZ_OT_set_reflection_probe_influence_from_selection(SOLLUMZ_OT_base, 
         )
 
     def run(self, context):
-        selected_archetype = get_selected_archetype(context)
-        selected_room = get_selected_room(context)
-        
-        if selected_room.reflection_probes_active_index >= len(selected_room.reflection_probes):
+        result = get_active_probe_with_validation(context)
+        if not result:
             self.message("No active reflection probe!")
             return False
         
-        selected_probe = selected_room.reflection_probes[selected_room.reflection_probes_active_index]
+        selected_archetype, selected_room, selected_probe = result
         
         selected_verts = []
         for obj in context.objects_in_mode:

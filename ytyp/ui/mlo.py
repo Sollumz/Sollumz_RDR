@@ -166,6 +166,8 @@ class SOLLUMZ_PT_REFLECTION_PROBE_PANEL(bpy.types.Panel):
         layout.use_property_decorate = False
         
         selected_room = get_selected_room(context)
+        if not selected_room:
+            return
         
         row = layout.row()
         col = row.column()

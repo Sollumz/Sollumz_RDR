@@ -4,6 +4,12 @@ from ...sollumz_preferences import get_theme_settings
 from mathutils import Vector, Matrix, Quaternion
 from ..utils import get_selected_archetype, get_selected_ytyp, get_selected_portal, get_selected_tcm, get_selected_probe, get_selected_room
 from ...tools.blenderhelper import find_parent
+from ...tools.meshhelper import generate_wireframe_box_vertices, quaternion_to_matrix
+
+# Gizmo visualization constants
+PROBE_CENTER_RADIUS = 0.25
+PROBE_INFLUENCE_ALPHA_SELECTED = 0.4
+PROBE_INFLUENCE_ALPHA_UNSELECTED = 0.3
 
 
 def can_draw_gizmos(context):
@@ -25,49 +31,6 @@ class RoomGizmo(bpy.types.Gizmo):
         super().__init__(*args, **kwargs)
         self.linked_room = None
 
-    @staticmethod
-    def get_verts(bbmin, bbmax):
-        return [
-            bbmin,
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            bbmin,
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            bbmin,
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-            bbmax
-        ]
-
     def draw(self, context):
         theme = get_theme_settings(context)
         selected_ytyp = get_selected_ytyp(context)
@@ -88,7 +51,7 @@ class RoomGizmo(bpy.types.Gizmo):
         asset = selected_archetype.asset
         if asset and room:
             self.custom_shape = self.new_custom_shape(
-                "LINES", RoomGizmo.get_verts(room.bb_min, room.bb_max))
+                "LINES", generate_wireframe_box_vertices(room.bb_min, room.bb_max))
             self.draw_custom_shape(
                 self.custom_shape, matrix=asset.matrix_world)
 
@@ -354,49 +317,6 @@ class ProbeGizmo(bpy.types.Gizmo):
         self.linked_probe = None
         self.linked_room = None
 
-    @staticmethod
-    def get_verts(bbmin, bbmax):
-        return [
-            bbmin,
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            bbmin,
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            bbmin,
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-            bbmax
-        ]
-
     def draw(self, context):
         theme = get_theme_settings(context)
         selected_probe = get_selected_probe(context)
@@ -414,46 +334,54 @@ class ProbeGizmo(bpy.types.Gizmo):
         self.alpha = a
 
         selected_archetype = get_selected_archetype(context)
+        if not selected_archetype or not selected_archetype.asset:
+            return
+        
         asset = selected_archetype.asset
-        if asset and probe and room:
-            # Get min/max as vectors
-            extents_min = Vector(probe.min_extents)
-            extents_max = Vector(probe.max_extents)
-            
-            # Ensure we have actual min and max in each dimension
-            actual_min = Vector((
-                min(extents_min.x, extents_max.x),
-                min(extents_min.y, extents_max.y),
-                min(extents_min.z, extents_max.z)
-            ))
-            actual_max = Vector((
-                max(extents_min.x, extents_max.x),
-                max(extents_min.y, extents_max.y),
-                max(extents_min.z, extents_max.z)
-            ))
-            
-            # Translate to probe position (room center + center_offset)
-            room_center = (room.bb_min + room.bb_max) / 2
-            probe_position = room_center + probe.center_offset
-            
-            # Apply rotation 
-            quat = Quaternion(probe.rotation)  # WXYZ format
-            
-            # Convert quaternion to Euler angles with ZYX order to avoid gimbal lock
-            euler = quat.to_euler('ZYX')
-            rot_matrix = euler.to_matrix().to_4x4()
-            
-            # Translate to probe position, then rotate
-            probe_matrix = (
-                asset.matrix_world @
-                Matrix.Translation(probe_position) @
-                rot_matrix
-            )
-            
-            self.custom_shape = self.new_custom_shape(
-                "LINES", ProbeGizmo.get_verts(actual_min, actual_max))
-            self.draw_custom_shape(
-                self.custom_shape, matrix=probe_matrix)
+        if not asset or not probe or not room:
+            return
+        
+        if not hasattr(probe, 'min_extents') or not hasattr(probe, 'max_extents') or not hasattr(probe, 'rotation') or not hasattr(probe, 'center_offset'):
+            return
+        
+        if not hasattr(room, 'bb_min') or not hasattr(room, 'bb_max'):
+            return
+        
+        # Get min/max as vectors
+        extents_min = Vector(probe.min_extents)
+        extents_max = Vector(probe.max_extents)
+        
+        # Ensure we have actual min and max in each dimension
+        actual_min = Vector((
+            min(extents_min.x, extents_max.x),
+            min(extents_min.y, extents_max.y),
+            min(extents_min.z, extents_max.z)
+        ))
+        actual_max = Vector((
+            max(extents_min.x, extents_max.x),
+            max(extents_min.y, extents_max.y),
+            max(extents_min.z, extents_max.z)
+        ))
+        
+        # Translate to probe position (room center + center_offset)
+        room_center = (room.bb_min + room.bb_max) / 2
+        probe_position = room_center + probe.center_offset
+        
+        # Apply rotation using helper function
+        quat = Quaternion(probe.rotation)  # WXYZ format
+        rot_matrix = quaternion_to_matrix(quat)
+        
+        # Translate to probe position, then rotate
+        probe_matrix = (
+            asset.matrix_world @
+            Matrix.Translation(probe_position) @
+            rot_matrix
+        )
+        
+        self.custom_shape = self.new_custom_shape(
+            "LINES", generate_wireframe_box_vertices(actual_min, actual_max))
+        self.draw_custom_shape(
+            self.custom_shape, matrix=probe_matrix)
 
 
 class ProbeCenterGizmo(bpy.types.Gizmo):
@@ -472,7 +400,12 @@ class ProbeCenterGizmo(bpy.types.Gizmo):
         selected_probe = get_selected_probe(context)
         probe = self.linked_probe
         room = self.linked_room
-        asset = get_selected_archetype(context).asset
+        
+        selected_archetype = get_selected_archetype(context)
+        if not selected_archetype or not selected_archetype.asset:
+            return
+        
+        asset = selected_archetype.asset
 
         if selected_probe == probe:
             r, g, b, a = theme.mlo_gizmo_probe_selected
@@ -482,17 +415,22 @@ class ProbeCenterGizmo(bpy.types.Gizmo):
         self.color = r, g, b
         self.alpha = a
 
-        if probe and asset and room:
-            select_id = select_id if select_id is not None else -1
-            # Position = room center + probe center_offset
-            room_center = (room.bb_min + room.bb_max) / 2
-            probe_position = room_center + probe.center_offset
-            t = asset.matrix_world @ Matrix.Translation(probe_position)
-            # Use a small radius for the sphere (0.25 units)
-            m = t @ Matrix.Scale(0.25, 4)
-            self.draw_preset_circle(m, axis="POS_X", select_id=select_id)
-            self.draw_preset_circle(m, axis="POS_Y", select_id=select_id)
-            self.draw_preset_circle(m, axis="POS_Z", select_id=select_id)
+        if not probe or not asset or not room:
+            return
+        
+        if not hasattr(probe, 'center_offset') or not hasattr(room, 'bb_min') or not hasattr(room, 'bb_max'):
+            return
+        
+        select_id = select_id if select_id is not None else -1
+        # Position = room center + probe center_offset
+        room_center = (room.bb_min + room.bb_max) / 2
+        probe_position = room_center + probe.center_offset
+        t = asset.matrix_world @ Matrix.Translation(probe_position)
+        # Use a small radius for the sphere
+        m = t @ Matrix.Scale(PROBE_CENTER_RADIUS, 4)
+        self.draw_preset_circle(m, axis="POS_X", select_id=select_id)
+        self.draw_preset_circle(m, axis="POS_Y", select_id=select_id)
+        self.draw_preset_circle(m, axis="POS_Z", select_id=select_id)
 
 
 class ProbeInfluenceGizmo(bpy.types.Gizmo):
@@ -502,49 +440,6 @@ class ProbeInfluenceGizmo(bpy.types.Gizmo):
         super().__init__(*args, **kwargs)
         self.linked_probe = None
         self.linked_room = None
-
-    @staticmethod
-    def get_verts(bbmin, bbmax):
-        return [
-            bbmin,
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            bbmin,
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            bbmin,
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            Vector((bbmin.x, bbmin.y, bbmax.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmin.x, bbmax.y, bbmin.z)),
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-
-            Vector((bbmax.x, bbmin.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmin.x, bbmax.y, bbmax.z)),
-            bbmax,
-
-            Vector((bbmax.x, bbmax.y, bbmin.z)),
-            bbmax
-        ]
 
     def draw(self, context):
         theme = get_theme_settings(context)
@@ -556,40 +451,48 @@ class ProbeInfluenceGizmo(bpy.types.Gizmo):
 
         if probe == selected_probe:
             r, g, b, a = theme.mlo_gizmo_probe_selected
-            self.alpha = a * 0.4  # Reduced alpha to show it's influence zone
+            self.alpha = a * PROBE_INFLUENCE_ALPHA_SELECTED
         else:
             r, g, b, a = theme.mlo_gizmo_probe
-            self.alpha = a * 0.3  # Reduced alpha to show it's influence zone
+            self.alpha = a * PROBE_INFLUENCE_ALPHA_UNSELECTED
 
         self.color = r, g, b
 
         selected_archetype = get_selected_archetype(context)
+        if not selected_archetype or not selected_archetype.asset:
+            return
+        
         asset = selected_archetype.asset
-        if asset and probe and room:
-            # Create a symmetric box around the probe center based on influence_extents
-            influence = Vector(probe.influence_extents)
-            half_influence = influence / 2
-            bbmin = -half_influence
-            bbmax = half_influence
-            
-            # Translate to probe position (room center + center_offset)
-            room_center = (room.bb_min + room.bb_max) / 2
-            probe_position = room_center + probe.center_offset
-            
-            # Apply rotation around the probe position
-            quat = Quaternion(probe.rotation)  # WXYZ format
-            
-            # Convert quaternion to Euler angles with ZYX order to avoid gimbal lock
-            euler = quat.to_euler('ZYX')
-            rot_matrix = euler.to_matrix().to_4x4()
-            
-            # Translate then rotate (box is already centered)
-            probe_matrix = asset.matrix_world @ Matrix.Translation(probe_position) @ rot_matrix
-            
-            self.custom_shape = self.new_custom_shape(
-                "LINES", ProbeInfluenceGizmo.get_verts(bbmin, bbmax))
-            self.draw_custom_shape(
-                self.custom_shape, matrix=probe_matrix)
+        if not asset or not probe or not room:
+            return
+        
+        if not hasattr(probe, 'influence_extents') or not hasattr(probe, 'rotation') or not hasattr(probe, 'center_offset'):
+            return
+        
+        if not hasattr(room, 'bb_min') or not hasattr(room, 'bb_max'):
+            return
+        
+        # Create a symmetric box around the probe center based on influence_extents
+        influence = Vector(probe.influence_extents)
+        half_influence = influence / 2
+        bbmin = -half_influence
+        bbmax = half_influence
+        
+        # Translate to probe position (room center + center_offset)
+        room_center = (room.bb_min + room.bb_max) / 2
+        probe_position = room_center + probe.center_offset
+        
+        # Apply rotation using helper function
+        quat = Quaternion(probe.rotation)  # WXYZ format
+        rot_matrix = quaternion_to_matrix(quat)
+        
+        # Translate then rotate (box is already centered)
+        probe_matrix = asset.matrix_world @ Matrix.Translation(probe_position) @ rot_matrix
+        
+        self.custom_shape = self.new_custom_shape(
+            "LINES", generate_wireframe_box_vertices(bbmin, bbmax))
+        self.draw_custom_shape(
+            self.custom_shape, matrix=probe_matrix)
 
 
 class ProbeGizmoGroup(bpy.types.GizmoGroup):
