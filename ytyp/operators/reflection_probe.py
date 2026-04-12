@@ -51,6 +51,8 @@ class SOLLUMZ_OT_delete_reflection_probe(SOLLUMZ_OT_base, bpy.types.Operator):
 
         # Get the current active index
         current_index = room.reflection_probes_active_index
+        if current_index < 0 or current_index >= len(room.reflection_probes):
+            return False
         
         # Remove the probe
         room.reflection_probes.remove(current_index)
