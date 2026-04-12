@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 import bpy
 from ...sollumz_properties import EntityProperties
 from ...tools.utils import get_list_item
+from ...tools.blenderhelper import tag_redraw
 from ..utils import get_selected_ytyp, get_selected_archetype
 from .flags import EntityFlags, RoomFlags, PortalFlags
 from .extensions import ExtensionsContainer, ExtensionType
@@ -131,7 +132,17 @@ class RoomProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     floor_id: bpy.props.IntProperty(name="Floor ID")
     exterior_visibility_depth: bpy.props.IntProperty(name="Exterior Visibility Depth", default=-1)
     reflection_probes: bpy.props.CollectionProperty(type=ReflectionProbeProperties, name="Reflection Probes")
-    reflection_probes_active_index: bpy.props.IntProperty(name="Reflection Probes Active Index", default=0, min=0)
+    
+    def update_reflection_probes_active_index(self, context: Optional[bpy.types.Context]):
+        if context is not None and getattr(context.scene, "show_probe_gizmo", False):
+            tag_redraw(context, space_type="VIEW_3D", region_type="WINDOW")
+    
+    reflection_probes_active_index: bpy.props.IntProperty(
+        name="Reflection Probes Active Index",
+        default=0,
+        min=0,
+        update=update_reflection_probes_active_index,
+    )
 
     # Blender usage only
     id: bpy.props.IntProperty(name="Id")
