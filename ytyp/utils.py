@@ -4,7 +4,7 @@ from typing import Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .properties.ytyp import CMapTypesProperties, ArchetypeProperties
-    from .properties.mlo import RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties, EntitySetProperties
+    from .properties.mlo import RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties, EntitySetProperties, ReflectionProbeProperties
     from .properties.extensions import ExtensionProperties
 
 import bpy
@@ -28,6 +28,15 @@ def get_selected_room(context) -> Union[RoomProperties, None]:
         archetype = ytyp.selected_archetype
         if archetype:
             return archetype.selected_room
+
+
+def get_selected_probe(context) -> Union[ReflectionProbeProperties, None]:
+    """Get the currently selected reflection probe from the selected room."""
+    room = get_selected_room(context)
+    if room and hasattr(room, 'reflection_probes'):
+        if room.reflection_probes_active_index >= 0 and room.reflection_probes_active_index < len(room.reflection_probes):
+            return room.reflection_probes[room.reflection_probes_active_index]
+    return None
 
 
 def get_selected_portal(context) -> Union[PortalProperties, None]:
@@ -58,6 +67,32 @@ def get_selected_extension(context) -> Union[ExtensionProperties, None]:
     archetype = get_selected_archetype(context)
     if archetype:
         return archetype.selected_extension
+
+
+def get_active_probe_with_validation(context):
+    """Get active reflection probe with full validation.
+    
+    Validates that archetype, room, and probe are available and accessible.
+    
+    Args:
+        context: Blender context
+        
+    Returns:
+        Tuple (archetype, room, probe) if valid, None otherwise
+    """
+    archetype = get_selected_archetype(context)
+    if not archetype:
+        return None
+    
+    room = get_selected_room(context)
+    if not room or not hasattr(room, 'reflection_probes'):
+        return None
+    
+    if room.reflection_probes_active_index < 0 or room.reflection_probes_active_index >= len(room.reflection_probes):
+        return None
+    
+    probe = room.reflection_probes[room.reflection_probes_active_index]
+    return (archetype, room, probe)
 
 
 def get_selected_entity_extension(context) -> Union[ExtensionProperties, None]:

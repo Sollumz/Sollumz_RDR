@@ -3,7 +3,7 @@ import bmesh
 import numpy as np
 from numpy.typing import NDArray
 from typing import Optional
-from mathutils import Vector, Matrix
+from mathutils import Vector, Matrix, Quaternion
 from mathutils.geometry import distance_point_to_plane
 from math import radians
 from ..sollumz_properties import SollumType, MaterialType
@@ -543,3 +543,74 @@ def flip_uv(uv):
     v = (uv[1] - 1.0) * -1
 
     return [u, v]
+
+
+def generate_wireframe_box_vertices(bbmin, bbmax):
+    """Generate vertices for a wireframe box using LINES mode.
+    
+    Creates pairs of vertices representing all edges of a bounding box.
+    Used by gizmos for 3D visualization.
+    
+    Args:
+        bbmin: Minimum corner of the bounding box (Vector)
+        bbmax: Maximum corner of the bounding box (Vector)
+        
+    Returns:
+        List of Vector pairs representing edges
+    """
+    return [
+        bbmin,
+        Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+        bbmin,
+        Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+        bbmin,
+        Vector((bbmin.x, bbmax.y, bbmin.z)),
+
+        Vector((bbmax.x, bbmin.y, bbmax.z)),
+        Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+        Vector((bbmin.x, bbmin.y, bbmax.z)),
+        Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+        Vector((bbmin.x, bbmax.y, bbmin.z)),
+        Vector((bbmin.x, bbmax.y, bbmax.z)),
+
+        Vector((bbmax.x, bbmin.y, bbmax.z)),
+        Vector((bbmax.x, bbmin.y, bbmin.z)),
+
+        Vector((bbmax.x, bbmin.y, bbmax.z)),
+        Vector((bbmin.x, bbmin.y, bbmax.z)),
+
+        Vector((bbmax.x, bbmin.y, bbmin.z)),
+        Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+        Vector((bbmin.x, bbmax.y, bbmin.z)),
+        Vector((bbmax.x, bbmax.y, bbmin.z)),
+
+        Vector((bbmax.x, bbmin.y, bbmax.z)),
+        bbmax,
+
+        Vector((bbmin.x, bbmax.y, bbmax.z)),
+        bbmax,
+
+        Vector((bbmax.x, bbmax.y, bbmin.z)),
+        bbmax
+    ]
+
+
+def quaternion_to_matrix(quat, order='ZYX'):
+    """Convert a quaternion to a 4x4 rotation matrix via Euler angles.
+    
+    Avoids gimbal lock by using specified Euler angle order.
+    
+    Args:
+        quat: Quaternion in WXYZ format
+        order: Euler angle order ('ZYX' prevents gimbal lock for probe rotations)
+        
+    Returns:
+        4x4 rotation matrix
+    """
+    euler = quat.to_euler(order)
+    return euler.to_matrix().to_4x4()

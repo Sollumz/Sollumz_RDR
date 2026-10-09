@@ -106,6 +106,18 @@ def create_mlo_room(room_xml: ytypxml.Room, archetype: ArchetypeProperties):
     room.flags.total = str(room_xml.flags)
     room.floor_id = room_xml.floor_id
     room.exterior_visibility_depth = room_xml.exterior_visibility_depth
+    
+    # Import reflection probes
+    for probe_xml in room_xml.reflection_probes:
+        probe = room.reflection_probes.add()
+        probe.min_extents = probe_xml.min_extents
+        probe.max_extents = probe_xml.max_extents
+        probe.rotation = probe_xml.rotation
+        probe.center_offset = probe_xml.center_offset
+        probe.influence_extents = probe_xml.influence_extents
+        probe.probe_priority = probe_xml.probe_priority
+        probe.guid = probe_xml.guid
+    
     for index in room_xml.attached_objects:
         archetype.entities[index].attached_room_id = str(room.id)
 

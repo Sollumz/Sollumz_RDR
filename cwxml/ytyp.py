@@ -210,6 +210,7 @@ class Room(ElementTree):
         self.exterior_visibility_depth = ValueProperty(
             "exteriorVisibiltyDepth", -1)
         self.attached_objects = AttachedObjectsBuffer()
+        self.reflection_probes = ReflectionProbesList()
 
 
 class RoomsList(ListProperty):
@@ -291,6 +292,29 @@ class TimeCycleModifiersList(ListProperty):
     def __init__(self, tag_name=None, value=None):
         super().__init__(tag_name="timeCycleModifiers", value=value or [])
         self.item_type = AttributeProperty("itemType", "CMloTimeCycleModifier")
+
+
+class ReflectionProbe(ElementTree):
+    tag_name = "Item"
+
+    def __init__(self):
+        super().__init__()
+        self.min_extents = VectorProperty("minExtents")
+        self.max_extents = VectorProperty("maxExtents")
+        self.rotation = QuaternionProperty("rotation")
+        self.center_offset = VectorProperty("centerOffset")
+        self.influence_extents = VectorProperty("influenceExtents")
+        self.probe_priority = ValueProperty("probePriority")
+        self.guid = TextProperty("guid")
+
+
+class ReflectionProbesList(ListProperty):
+    tag_name = "reflectionProbes"
+    list_type = ReflectionProbe
+
+    def __init__(self, tag_name=None, value=None):
+        super().__init__(tag_name="reflectionProbes", value=value or [])
+        self.item_type = AttributeProperty("itemType", "CReflectionProbeData")
 
 
 class MloArchetype(BaseArchetype):

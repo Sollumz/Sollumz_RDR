@@ -768,6 +768,7 @@ def register():
     bpy.types.Scene.show_room_gizmo = bpy.props.BoolProperty(name="Show Room Gizmo", default=True)
     bpy.types.Scene.show_portal_gizmo = bpy.props.BoolProperty(name="Show Portal Gizmo", default=True)
     bpy.types.Scene.show_mlo_tcm_gizmo = bpy.props.BoolProperty(name="Show Timecycle Modifier Gizmo", default=True)
+    bpy.types.Scene.show_probe_gizmo = bpy.props.BoolProperty(name="Show Probe Gizmo", default=True)
     sync_default = get_addon_preferences().default_sync_selection_enabled
     bpy.types.Scene.sz_sync_archetypes_selection = BoolProperty(
         name="Sync Selection", description="Synchronize archetypes selection with objects selection in the scene.",
@@ -790,6 +791,7 @@ def unregister():
     del bpy.types.Scene.show_room_gizmo
     del bpy.types.Scene.show_portal_gizmo
     del bpy.types.Scene.show_mlo_tcm_gizmo
+    del bpy.types.Scene.show_probe_gizmo
     del bpy.types.Scene.sz_sync_archetypes_selection
     del bpy.types.Scene.sz_sync_mlo_entities_selection
     del bpy.types.Scene.create_archetype_type
