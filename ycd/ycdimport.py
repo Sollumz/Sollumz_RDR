@@ -1,8 +1,9 @@
 import os
+import json
 import bpy
 from mathutils import Vector, Quaternion
 from ..cwxml import clipdictionary as ycdxml
-from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType
+from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, SollumzGame
 from ..tools.animationhelper import (
     Track,
     TrackFormat,
@@ -12,12 +13,14 @@ from ..tools.animationhelper import (
     get_scene_fps
 )
 from ..tools.utils import color_hash
+from .. import logger
 
 
-def create_anim_obj(sollum_type: SollumType) -> bpy.types.Object:
+def create_anim_obj(sollum_type: SollumType, game: SollumzGame | None = None) -> bpy.types.Object:
     anim_obj = bpy.data.objects.new(SOLLUMZ_UI_NAMES[sollum_type], None)
     anim_obj.empty_display_size = 0
     anim_obj.sollum_type = sollum_type
+    anim_obj.sollum_game_type = game if game is not None else bpy.context.scene.sollum_game_type
     bpy.context.collection.objects.link(anim_obj)
     return anim_obj
 
@@ -115,17 +118,32 @@ def combine_sequences_and_build_action_data(animation: ycdxml.Animation) -> Acti
         sequence_frame_limit = animation.frame_count + 30
 
     action_data = {}
+    supported_tracks = set(range(len(animation.bone_ids)))
+    if isinstance(animation, ycdxml.RDRAnimation):
+        unsupported = set()
+        for index, bone_data in enumerate(animation.bone_ids):
+            expected_format = TrackFormatMap.get(bone_data.track)
+            if expected_format != bone_data.format:
+                supported_tracks.discard(index)
+                unsupported.add((bone_data.track, bone_data.format))
+        if unsupported:
+            logger.warning(f"Animation '{animation.hash}': skipping unsupported RDR track/TypeId pairs "
+                           f"{sorted(unsupported)}. Specialized motion is not imported.")
 
     for frame_id in range(0, animation.frame_count):
         sequence_index = int(frame_id / (sequence_frame_limit))
-        sequence_frame = frame_id % (sequence_frame_limit)
 
         if sequence_index >= len(animation.sequences):
             sequence_index = len(animation.sequences) - 1
 
+        # RDR sequences overlap at their boundary, including the final sample.
+        sequence_frame = frame_id - sequence_index * sequence_frame_limit
+
         sequence = animation.sequences[sequence_index]
 
         for sequence_data_index, sequence_data in enumerate(sequence.sequence_data):
+            if sequence_data_index not in supported_tracks:
+                continue
             bone_data = animation.bone_ids[sequence_data_index]
             bone_id = bone_data.bone_id
 
@@ -266,7 +284,23 @@ def clip_to_obj(
     clip_obj.clip_properties.name = clip.name
     clip_obj.clip_properties.animations.clear()
 
-    if clip.type == ycdxml.ClipType.ANIMATION:
+    if isinstance(clip, ycdxml.RDRMultiClip):
+        clip_obj.clip_properties.rdr_multi = True
+        clip_obj.clip_properties.duration = clip.duration
+        for part_index, part in enumerate(clip.parts):
+            for animation in part.clips:
+                animation_data = animations_map[animation.animation_hash]
+                animation_obj = animations_obj_map[animation.animation_hash]
+                duration_frames = get_action_duration_frames(animation_obj.animation_properties.action)
+                link = clip_obj.clip_properties.animations.add()
+                link.animation = animation_obj
+                link.start_frame = animation.start_time / animation_data.duration * duration_frames
+                link.end_frame = animation.end_time / animation_data.duration * duration_frames
+                link.rdr_part_index = part_index
+                link.rdr_part_duration = part.duration
+                link.rdr_speed = animation.rate
+                link.rdr_unknown_10 = json.dumps([list(value.value) for value in animation.unknown_10])
+    elif clip.type == ycdxml.ClipType.ANIMATION:
         animation_data = animations_map[clip.animation_hash]
         animation_obj = animations_obj_map[clip.animation_hash]
         duration_secs = animation_data.duration
@@ -334,10 +368,13 @@ def clip_to_obj(
     return clip_obj
 
 
-def create_clip_dictionary_template(name: str) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object]:
-    clip_dictionary_obj = create_anim_obj(SollumType.CLIP_DICTIONARY)
-    clips_obj = create_anim_obj(SollumType.CLIPS)
-    animations_obj = create_anim_obj(SollumType.ANIMATIONS)
+def create_clip_dictionary_template(
+    name: str,
+    game: SollumzGame | None = None,
+) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object]:
+    clip_dictionary_obj = create_anim_obj(SollumType.CLIP_DICTIONARY, game)
+    clips_obj = create_anim_obj(SollumType.CLIPS, clip_dictionary_obj.sollum_game_type)
+    animations_obj = create_anim_obj(SollumType.ANIMATIONS, clip_dictionary_obj.sollum_game_type)
 
     clip_dictionary_obj.name = name
 
@@ -348,7 +385,8 @@ def create_clip_dictionary_template(name: str) -> tuple[bpy.types.Object, bpy.ty
 
 
 def clip_dictionary_to_obj(clip_dictionary: ycdxml.ClipDictionary, name: str) -> bpy.types.Object:
-    clip_dict_obj, clips_obj, animations_obj = create_clip_dictionary_template(name)
+    game = SollumzGame.RDR if isinstance(clip_dictionary, ycdxml.RDRClipDictionary) else SollumzGame.GTA
+    clip_dict_obj, clips_obj, animations_obj = create_clip_dictionary_template(name, game)
 
     animations_map = {}
     animations_obj_map = {}
@@ -358,6 +396,7 @@ def clip_dictionary_to_obj(clip_dictionary: ycdxml.ClipDictionary, name: str) ->
 
         animation_obj = animation_to_obj(animation)
         animation_obj.parent = animations_obj
+        animation_obj.sollum_game_type = game
 
         animations_obj_map[animation.hash] = animation_obj
 
@@ -365,6 +404,7 @@ def clip_dictionary_to_obj(clip_dictionary: ycdxml.ClipDictionary, name: str) ->
         clip.name = clip.name.replace("pack:/", "")
         clip_obj = clip_to_obj(clip, animations_map, animations_obj_map)
         clip_obj.parent = clips_obj
+        clip_obj.sollum_game_type = game
 
     return clip_dict_obj
 

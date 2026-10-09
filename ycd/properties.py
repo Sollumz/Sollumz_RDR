@@ -94,6 +94,11 @@ class ClipProperty(bpy.types.PropertyGroup):
 
 
 class ClipAnimation(bpy.types.PropertyGroup):
+    rdr_part_index: bpy.props.IntProperty(name="Part", default=0, min=0)
+    rdr_part_duration: bpy.props.FloatProperty(name="Part Duration", default=0, min=0, subtype="TIME_ABSOLUTE")
+    rdr_speed: bpy.props.FloatProperty(name="Speed", default=0, min=0, description="Zero calculates speed from part duration")
+    rdr_unknown_10: bpy.props.StringProperty(options={"HIDDEN"})
+
     def on_animation_changed(self, context):
         if self.animation is None:
             return
@@ -124,6 +129,8 @@ class ClipAnimation(bpy.types.PropertyGroup):
 
 
 class ClipProperties(bpy.types.PropertyGroup):
+    rdr_multi: bpy.props.BoolProperty(name="Multi Clip", default=False)
+
     hash: bpy.props.StringProperty(name="Hash", default="")
     name: bpy.props.StringProperty(name="Name", default="")
 

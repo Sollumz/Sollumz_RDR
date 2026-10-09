@@ -3,9 +3,11 @@ from abc import ABC as AbstractClass, abstractmethod
 from enum import Enum
 from mathutils import Vector
 from .element import (
+    AttributeProperty,
     ElementTree,
     ElementProperty,
     ListProperty,
+    ListPropertyRequired,
     QuaternionProperty,
     TextProperty,
     ValueProperty,
@@ -15,6 +17,9 @@ from .element import (
 from xml.etree import ElementTree as ET
 from inspect import isclass
 from math import sqrt
+from copy import deepcopy
+from ..sollumz_properties import SollumzGame, set_import_export_current_game
+from .. import logger
 
 
 class YCD:
@@ -23,7 +28,12 @@ class YCD:
 
     @staticmethod
     def from_xml_file(filepath):
-        return ClipDictionary.from_xml_file(filepath)
+        root = ET.parse(filepath).getroot()
+        if root.tag == "RDR2ClipDictionary":
+            set_import_export_current_game(SollumzGame.RDR)
+            return RDRClipDictionary.from_xml(root)
+        set_import_export_current_game(SollumzGame.GTA)
+        return ClipDictionary.from_xml(root)
 
     @staticmethod
     def write_xml(clips_dict, filepath):
@@ -288,6 +298,13 @@ class ChannelsList(ItemTypeList):
             self.counts = ValueProperty("Counts", 0)
             self.type = "LinearFloat"
 
+    class IncrementalFloat(QuantizeFloat):
+        type = "IncrementalFloat"
+
+        def __init__(self):
+            super().__init__()
+            self.type = "IncrementalFloat"
+
     class CachedQuaternion1(Channel):
         type = "CachedQuaternion1"
 
@@ -461,3 +478,271 @@ class ClipDictionary(ElementTree):
         super().__init__()
         self.clips = ClipsList()
         self.animations = ClipDictionary.AnimationsList()
+
+
+class RDRChannelsList(ChannelsList):
+    @classmethod
+    def from_xml(cls, element: ET.Element):
+        element = deepcopy(element)
+        for item in element:
+            ET.SubElement(item, "Type", value=item.get("type", ""))
+        channels = ChannelsList.from_xml(element)
+        for channel in channels.value:
+            if channel.type == "IndirectQuantizeFloat" and not channel.frames:
+                # Stock CodeX XML omits frame indices and evaluates Values cyclically.
+                channel.frames = list(range(len(channel.values)))
+                logger.warning("RDR IndirectQuantizeFloat has no Frames indices; using CodeX's cyclic Values "
+                               "fallback. Original sample timing cannot be reconstructed from this XML.")
+        result = cls()
+        result.value = channels.value
+        return result
+
+    def to_xml(self):
+        element = super().to_xml()
+        if element is None:
+            return None
+        for item in element:
+            channel_type = item.find("Type")
+            item.set("type", channel_type.get("value"))
+            item.remove(channel_type)
+            values = item.find("Values")
+            if values is not None:
+                # Nine significant digits preserve float32 samples without long decimal expansions.
+                values.text = " ".join(format(float(value), ".9g") for value in values.text.split())
+        return element
+
+
+class RDRAttributesList(AttributesList):
+    @classmethod
+    def from_xml(cls, element: ET.Element):
+        element = deepcopy(element)
+        for item in element:
+            ET.SubElement(item, "Type", value=item.get("type", ""))
+            name = item.find("Name")
+            if name is not None:
+                name.tag = "NameHash"
+        attributes = AttributesList.from_xml(element)
+        result = cls()
+        result.value = attributes.value
+        return result
+
+    def to_xml(self):
+        element = super().to_xml()
+        if element is None:
+            return ET.Element(self.tag_name)
+        for item in element:
+            attribute_type = item.find("Type")
+            item.set("type", attribute_type.get("value"))
+            item.remove(attribute_type)
+            item.find("NameHash").tag = "Name"
+            unknown = item.find("Unknown2C")
+            if unknown is not None:
+                item.remove(unknown)
+        return element
+
+
+class RDRProperty(Property):
+    def __init__(self):
+        super().__init__()
+        self.name_hash = TextProperty("Name", "")
+        self.unk_hash = ValueProperty("Signature", 0)
+        self.attributes = RDRAttributesList()
+
+
+class RDRTag(RDRProperty):
+    def __init__(self):
+        super().__init__()
+        self.start_phase = ValueProperty("StartPhase", 0.0)
+        self.end_phase = ValueProperty("EndPhase", 0.0)
+
+
+class RDRAnimation(Animation):
+    class BoneIdList(Animation.BoneIdList):
+        class BoneId(Animation.BoneIdList.BoneId):
+            def __init__(self):
+                super().__init__()
+                self.track = ValueProperty("TrackId", 0)
+                self.format = ValueProperty("TypeId", 0)
+
+        list_type = BoneId
+
+    class SequenceDataList(Animation.SequenceDataList):
+        class SequenceData(Animation.SequenceDataList.SequenceData):
+            def __init__(self):
+                super().__init__()
+                self.channels = RDRChannelsList()
+
+        tag_name = "Tracks"
+        list_type = SequenceData
+
+    class SequenceList(Animation.SequenceList):
+        class Sequence(Animation.SequenceList.Sequence):
+            def __init__(self):
+                super().__init__()
+                self.hash = ValueProperty("Signature", 0)
+                self.sequence_data = RDRAnimation.SequenceDataList()
+
+        list_type = Sequence
+
+    def __init__(self):
+        super().__init__()
+        self.hash = TextProperty("Name", "")
+        self.unknown10 = ValueProperty("Flags", 0x100)
+        self.dict_index = ValueProperty("DictIndex", 0)
+        self.sequence_frame_limit = ValueProperty("SequenceSize", 255)
+        self.unknown1C = ValueProperty("Signature", 0)
+        self.bone_ids = self.BoneIdList()
+        self.sequences = self.SequenceList()
+
+    @classmethod
+    def from_xml(cls, element: ET.Element):
+        animation = super().from_xml(element)
+        animation.hash = animation.hash.removeprefix("pack:/").removesuffix(".anim")
+        return animation
+
+    def to_xml(self):
+        element = super().to_xml()
+        element.find("Name").text = "pack:/" + self.hash + ".anim"
+        return element
+
+
+class RDRClip(ClipsList.ClipAnimation):
+    xml_clip_type = "Single"
+
+    class TagList(ListPropertyRequired):
+        tag_name = "Tags"
+        list_type = RDRTag
+
+    class PropertyList(ListPropertyRequired):
+        tag_name = "Properties"
+        list_type = RDRProperty
+
+    def __init__(self):
+        super().__init__()
+        self.hash = TextProperty("Name", "")
+        # The common importer uses name for the optional displayed clip name.
+        object.__setattr__(self, "name", "")
+        self.dictionary = TextProperty("Dict", "")
+        self.animation_hash = TextProperty("Animation", "")
+        self.rate = ValueProperty("Speed", 1.0)
+        self.unknown30 = ValueProperty("Signature", 0)
+        self.tags = self.TagList()
+        self.properties = self.PropertyList()
+
+    @classmethod
+    def from_xml(cls, element: ET.Element):
+        if element.get("type") != cls.xml_clip_type:
+            raise ValueError("Invalid RDR clip type.")
+        clip = super().from_xml(element)
+        clip.hash = clip.hash.removeprefix("pack:/").removesuffix(".clip")
+        clip.name = clip.hash + ".clip"
+        return clip
+
+    def to_xml(self):
+        element = super().to_xml()
+        element.set("type", self.xml_clip_type)
+        element.remove(element.find("Type"))
+        element.find("Name").text = "pack:/" + self.hash + ".clip"
+        return element
+
+
+class RDRMultiClipAnimation(ClipAnimationsList.ClipAnimation):
+    class Unknown10List(ListProperty):
+        tag_name = "Unknown_10"
+        item_tag_name = "Item"
+        list_type = Vector4Property
+
+    def __init__(self):
+        super().__init__()
+        self.animation_hash = TextProperty("Animation", "")
+        self.rate = ValueProperty("Speed", 1.0)
+        self.unknown_10 = self.Unknown10List()
+
+
+class RDRMultiClipPart(ElementTree):
+    class ClipsList(ListPropertyRequired):
+        tag_name = "Clips"
+        list_type = RDRMultiClipAnimation
+
+    tag_name = "Item"
+
+    def __init__(self):
+        super().__init__()
+        self.duration = ValueProperty("Duration", 0.0)
+        self.clips = self.ClipsList()
+
+
+class RDRMultiClip(RDRClip):
+    class PartsList(ListPropertyRequired):
+        tag_name = "Parts"
+        list_type = RDRMultiClipPart
+
+    xml_clip_type = "Multi"
+
+    def __init__(self):
+        super().__init__()
+        for name in ("animation_hash", "start_time", "end_time", "rate"):
+            delattr(self, name)
+        self.type = ClipType.ANIMATION_LIST
+        self.parts = self.PartsList()
+
+    @property
+    def duration(self):
+        return sum(part.duration for part in self.parts)
+
+
+class RDRClipsList(ClipsList):
+    @classmethod
+    def from_xml(cls, element: ET.Element):
+        result = cls()
+        result.value = []
+        for item in element:
+            clip_type = {"Single": RDRClip, "Multi": RDRMultiClip}.get(item.get("type"))
+            if clip_type is None:
+                raise ValueError("Unsupported RDR clip type: " + str(item.get("type")))
+            result.value.append(clip_type.from_xml(item))
+        return result
+
+
+class RDRAnimationLookup(ElementTree):
+    tag_name = "Item"
+
+    def __init__(self):
+        super().__init__()
+        self.name = TextProperty("Name", "")
+        self.dict_index = ValueProperty("DictIndex", 0)
+
+
+class RDRAnimationDictionary(ElementTree):
+    class AnimationsList(ClipDictionary.AnimationsList):
+        list_type = RDRAnimation
+
+    tag_name = "AnimDict"
+
+    def __init__(self):
+        super().__init__()
+        self.version = AttributeProperty("version", 0)
+        self.name = TextProperty("Name", "")
+        self.animations = self.AnimationsList()
+
+
+class RDRClipDictionary(ClipDictionary):
+    required_empty_tags = ("Tags", "Properties", "Attributes")
+
+    class AnimationLookupList(ListProperty):
+        tag_name = "Animations"
+        list_type = RDRAnimationLookup
+
+    tag_name = "RDR2ClipDictionary"
+
+    def __init__(self):
+        ElementTree.__init__(self)
+        self.version = AttributeProperty("version", 0)
+        self.name = TextProperty("Name", "")
+        self.clips = RDRClipsList()
+        self.animation_lookup = self.AnimationLookupList()
+        self.anim_dict = RDRAnimationDictionary()
+
+    @property
+    def animations(self):
+        return self.anim_dict.animations

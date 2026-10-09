@@ -9,11 +9,11 @@ from ..tools.jenkhash import name_to_hash_literal
 from contextlib import contextmanager
 
 
-def remove_elements_with_no_attributes(elem):
+def remove_elements_with_no_attributes(elem, required_tags=()):
     for child in list(elem):
-        remove_elements_with_no_attributes(child)
+        remove_elements_with_no_attributes(child, required_tags)
         
-        if child.text or len(child.attrib) > 0:
+        if child.text or len(child.attrib) > 0 or child.tag in required_tags:
             continue
         elem.remove(child)
 
@@ -70,6 +70,8 @@ def get_str_type(value: str):
 
 class Element(AbstractClass):
     """Abstract XML element to base all other XML elements off of"""
+
+    required_empty_tags = ()
     @property
     @abstractmethod
     def tag_name(self):
@@ -106,7 +108,7 @@ class Element(AbstractClass):
         element = self.to_xml()
         indent(element)
         elementTree = ET.ElementTree(element)
-        remove_elements_with_no_attributes(elementTree.getroot())
+        remove_elements_with_no_attributes(elementTree.getroot(), self.required_empty_tags)
         elementTree.write(filepath, encoding="UTF-8", xml_declaration=True)
 
 

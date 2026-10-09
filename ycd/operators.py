@@ -1,10 +1,11 @@
 import bpy
+import math
 from ..sollumz_helper import SOLLUMZ_OT_base
 from ..sollumz_properties import SollumType
 from ..tools.blenderhelper import find_child_by_type
 from ..tools.meshhelper import flip_uv
 from ..tools.utils import color_hash
-from ..tools.animationhelper import is_any_sollumz_animation_obj, update_uv_clip_hash, get_scene_fps
+from ..tools.animationhelper import is_any_sollumz_animation_obj, update_uv_clip_hash, get_scene_fps, action_fcurves
 from .ycdimport import create_clip_dictionary_template, create_anim_obj
 from .. import logger
 
@@ -75,14 +76,14 @@ class SOLLUMZ_OT_clip_apply_nla(SOLLUMZ_OT_base, bpy.types.Operator):
         if len(clip_properties.animations) <= 0:
             return {"FINISHED"}
 
-        # TODO: animation may be None, or not all animations have the same target/are filled in
-        target = clip_properties.animations[0].animation.animation_properties.get_target()
-        if target is None:
-            return {"FINISHED"}
-
         clip_frame_duration = clip_properties.get_duration_in_frames()
+        if not math.isfinite(clip_frame_duration) or clip_frame_duration <= 0:
+            self.report({"WARNING"}, "Clip duration must be positive to preview animation.")
+            return {"CANCELLED"}
 
+        target = None
         groups = {}
+        skipped = 0
 
         for clip_animation in clip_properties.animations:
             if clip_animation.animation is None:
@@ -94,6 +95,18 @@ class SOLLUMZ_OT_clip_apply_nla(SOLLUMZ_OT_base, bpy.types.Operator):
             end_frame = clip_animation.end_frame
 
             action = animation_properties.action
+            animation_target = animation_properties.get_target()
+            if (action is None or animation_target is None
+                    or not math.isfinite(start_frame) or not math.isfinite(end_frame)
+                    or end_frame <= start_frame
+                    or not any(curve.keyframe_points or curve.sampled_points for curve in action_fcurves(action))):
+                skipped += 1
+                continue
+            if target is None:
+                target = animation_target
+            if animation_target != target:
+                skipped += 1
+                continue
 
             if action.name not in groups:
                 groups[action.name] = []
@@ -106,6 +119,13 @@ class SOLLUMZ_OT_clip_apply_nla(SOLLUMZ_OT_base, bpy.types.Operator):
                 "end_frame": end_frame,
                 "action": action,
             })
+
+        if not groups:
+            self.report({"WARNING"}, "Clip has no supported keyed animation with a positive frame range and target. "
+                        "Imported facial tracks may be unsupported.")
+            return {"CANCELLED"}
+        if skipped:
+            self.report({"WARNING"}, f"Skipped {skipped} empty, invalid or differently targeted animation links.")
 
         if target.animation_data is None:
             target.animation_data_create()
@@ -542,7 +562,7 @@ class SOLLUMZ_OT_create_clip_dictionary(SOLLUMZ_OT_base, bpy.types.Operator):
     bl_label = "Create clip dictionary template"
 
     def run(self, context):
-        create_clip_dictionary_template("Clip Dictionary")
+        create_clip_dictionary_template("Clip Dictionary", context.scene.sollum_game_type)
         return {"FINISHED"}
 
 
@@ -579,7 +599,7 @@ class SOLLUMZ_OT_create_clip(SOLLUMZ_OT_base, bpy.types.Operator):
                 clip_dictionary_obj, SollumType.CLIPS)
 
         if clips_obj is not None:
-            animation_obj = create_anim_obj(SollumType.CLIP)
+            animation_obj = create_anim_obj(SollumType.CLIP, clips_obj.parent.sollum_game_type)
 
             animation_obj.parent = clips_obj
 
@@ -619,7 +639,7 @@ class SOLLUMZ_OT_create_animation(SOLLUMZ_OT_base, bpy.types.Operator):
                 clip_dictionary_obj, SollumType.ANIMATIONS)
 
         if animations_obj is not None:
-            animation_obj = create_anim_obj(SollumType.ANIMATION)
+            animation_obj = create_anim_obj(SollumType.ANIMATION, animations_obj.parent.sollum_game_type)
 
             animation_obj.parent = animations_obj
 

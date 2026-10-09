@@ -2,7 +2,7 @@ from typing import Optional
 
 import bpy
 import numpy as np
-from ..sollumz_properties import SollumType, MaterialType
+from ..sollumz_properties import SollumType, MaterialType, SollumzGame
 from ..sollumz_ui import SOLLUMZ_PT_OBJECT_PANEL, SOLLUMZ_PT_MAT_PANEL
 from . import operators as ycd_ops
 from .properties import AnimationTracks
@@ -31,6 +31,8 @@ def draw_clip_properties(self, context):
             layout.prop(clip_properties, "hash")
         layout.prop(clip_properties, "name")
         layout.prop(clip_properties, "duration")
+        if obj.sollum_game_type == SollumzGame.RDR:
+            layout.prop(clip_properties, "rdr_multi")
 
         layout.operator(ycd_ops.SOLLUMZ_OT_clip_apply_nla.bl_idname,
                         text="Apply Clip to NLA")
@@ -397,6 +399,10 @@ class SOLLUMZ_PT_CLIP_ANIMATIONS(bpy.types.Panel):
                 box.prop(clip_animation, "animation", text="Animation")
 
                 draw_range_properties(box, clip_animation, "start_frame", "end_frame", "Frame Range")
+                if obj.sollum_game_type == SollumzGame.RDR:
+                    box.prop(clip_animation, "rdr_part_index")
+                    box.prop(clip_animation, "rdr_part_duration")
+                    box.prop(clip_animation, "rdr_speed")
 
 
 class SOLLUMZ_PT_CLIP_TAGS(bpy.types.Panel):
