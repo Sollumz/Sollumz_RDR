@@ -108,6 +108,15 @@ def get_quaternion_from_sequence_data(
             rotation = Quaternion(
                 (channel_values[3], channel_values[0], channel_values[1], channel_values[2]))
 
+    # RDR's type-8 marker normalizes all four stored components. Type 7 also
+    # normalizes over-length triples after reconstructing the missing component.
+    # Preserve the common GTA importer behavior and apply this only to RDR XML.
+    if isinstance(sequence_data, ycdxml.RDRAnimation.SequenceDataList.SequenceData) and any(
+        channel is not None and channel.type in ("CachedQuaternion1", "CachedQuaternion2")
+        for channel in sequence_data.channels
+    ):
+        rotation.normalize()
+
     return rotation
 
 

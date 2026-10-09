@@ -489,10 +489,7 @@ class RDRChannelsList(ChannelsList):
         channels = ChannelsList.from_xml(element)
         for channel in channels.value:
             if channel.type == "IndirectQuantizeFloat" and not channel.frames:
-                # Stock CodeX XML omits frame indices and evaluates Values cyclically.
-                channel.frames = list(range(len(channel.values)))
-                logger.warning("RDR IndirectQuantizeFloat has no Frames indices; using CodeX's cyclic Values "
-                               "fallback. Original sample timing cannot be reconstructed from this XML.")
+                raise ValueError("RDR IndirectQuantizeFloat XML is missing Frames; original timing cannot be recovered.")
         result = cls()
         result.value = channels.value
         return result

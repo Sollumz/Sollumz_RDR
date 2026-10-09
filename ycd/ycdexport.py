@@ -10,6 +10,7 @@ from typing import Optional
 from pathlib import Path
 from xml.etree.ElementTree import tostring
 from ..cwxml import clipdictionary as ycdxml
+from .rdr_channels import build_scalar_channel, build_quaternion_channels
 from ..sollumz_properties import SollumType, SollumzGame, import_export_current_game
 from ..tools import jenkhash
 from ..tools.blenderhelper import build_name_bone_map, build_bone_map
@@ -432,14 +433,7 @@ def build_values_channel(
     indirect_percentage: float = 0.1
 ) -> ycdxml.ChannelsList.Channel:
     if import_export_current_game() == SollumzGame.RDR:
-        if len(uniq_values) == 1:
-            channel = ycdxml.ChannelsList.StaticFloat()
-            channel.value = uniq_values[0]
-        else:
-            # CodeX XML import cannot reconstruct quantized channel settings.
-            channel = ycdxml.ChannelsList.RawFloat()
-            channel.values = values
-        return channel
+        return build_scalar_channel(values, indirect_percentage)
 
     values_len_percentage = len(uniq_values) / len(values)
 
@@ -514,6 +508,9 @@ def sequence_data_from_frames_data(
             sequence_data.channels.append(build_values_channel(values_y, uniq_y))
             sequence_data.channels.append(build_values_channel(values_z, uniq_z))
     elif track_format == TrackFormat.Quaternion:
+        if is_rdr:
+            sequence_data.channels.extend(build_quaternion_channels(frames_data))
+            return sequence_data
         values_x = []
         values_y = []
         values_z = []
