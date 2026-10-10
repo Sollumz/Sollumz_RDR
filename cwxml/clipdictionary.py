@@ -40,6 +40,23 @@ class YCD:
         return clips_dict.write_xml(filepath)
 
 
+class YAD:
+    file_extension = ".yad.xml"
+
+    @staticmethod
+    def from_xml_file(filepath):
+        root = ET.parse(filepath).getroot()
+        if root.tag not in ("RDR2AnimDictionary", "RDR2AnimationDictionary"):
+            raise ValueError(
+                f"YAD XML requires an RDR2AnimDictionary or RDR2AnimationDictionary root; got {root.tag!r}.")
+        set_import_export_current_game(SollumzGame.RDR)
+        return RDRStandaloneAnimationDictionary.from_xml(root)
+
+    @staticmethod
+    def write_xml(animation_dict, filepath):
+        return animation_dict.write_xml(filepath)
+
+
 class ItemTypeList(ListProperty, AbstractClass):
     class Item(ElementTree, AbstractClass):
         tag_name = "Item"
@@ -723,12 +740,22 @@ class RDRAnimationDictionary(ElementTree):
         self.animations = self.AnimationsList()
 
 
+class RDRStandaloneAnimationDictionary(RDRAnimationDictionary):
+    tag_name = "RDR2AnimDictionary"
+
+
 class RDRClipDictionary(ClipDictionary):
     required_empty_tags = ("Tags", "Properties", "Attributes")
 
     class AnimationLookupList(ListProperty):
         tag_name = "Animations"
         list_type = RDRAnimationLookup
+
+    class AnimationImportsList(ListProperty):
+        class Import(TextProperty):
+            tag_name = "Item"
+        tag_name = "AnimDictImports"
+        list_type = Import
 
     tag_name = "RDR2ClipDictionary"
 
@@ -738,7 +765,14 @@ class RDRClipDictionary(ClipDictionary):
         self.name = TextProperty("Name", "")
         self.clips = RDRClipsList()
         self.animation_lookup = self.AnimationLookupList()
+        self.animation_imports = self.AnimationImportsList()
         self.anim_dict = RDRAnimationDictionary()
+
+    def to_xml(self):
+        root = super().to_xml()
+        if self.animation_imports:
+            root.remove(root.find("AnimDict"))
+        return root
 
     @property
     def animations(self):

@@ -8,13 +8,13 @@ import re
 from bpy_extras.io_utils import ImportHelper
 from mathutils import Matrix, Quaternion
 from .sollumz_helper import SOLLUMZ_OT_base, find_sollumz_parent
-from .sollumz_properties import SollumType, SOLLUMZ_UI_NAMES, BOUND_TYPES, TimeFlagsMixin, ArchetypeType, LODLevel, SollumzGame
+from .sollumz_properties import SollumType, SOLLUMZ_UI_NAMES, BOUND_TYPES, TimeFlagsMixin, ArchetypeType, LODLevel, SollumzGame, set_import_export_current_game
 from .sollumz_preferences import get_export_settings
 from .cwxml.drawable import YDR, YDD
 from .cwxml.fragment import YFT
 from .cwxml.bound import YBN
 from .cwxml.navmesh import YNV
-from .cwxml.clipdictionary import YCD
+from .cwxml.clipdictionary import YCD, YAD
 from .cwxml.ytyp import YTYP
 from .cwxml.ymap import YMAP
 from .ydr.ydrimport import import_ydr
@@ -26,8 +26,8 @@ from .yft.yftexport import export_yft
 from .ybn.ybnimport import import_ybn
 from .ybn.ybnexport import export_ybn
 from .ynv.ynvimport import import_ynv
-from .ycd.ycdimport import import_ycd
-from .ycd.ycdexport import export_ycd
+from .ycd.ycdimport import import_ycd, import_yad
+from .ycd.ycdexport import export_ycd, export_yad
 from .ymap.ymapimport import import_ymap
 from .ymap.ymapexport import export_ymap
 from .ytyp.ytypimport import import_ytyp
@@ -70,7 +70,7 @@ class SOLLUMZ_OT_import_assets(bpy.types.Operator, ImportHelper, TimedOperator):
     )
 
     filter_glob: bpy.props.StringProperty(
-        default="".join(f"*{filetype.file_extension};" for filetype in (YDR, YDD, YFT, YBN, YNV, YCD, YMAP, YTYP)),
+        default="".join(f"*{filetype.file_extension};" for filetype in (YDR, YDD, YFT, YBN, YNV, YCD, YAD, YMAP, YTYP)),
         options={"HIDDEN", "SKIP_SAVE"},
         maxlen=255,
     )
@@ -105,8 +105,10 @@ class SOLLUMZ_OT_import_assets(bpy.types.Operator, ImportHelper, TimedOperator):
                         import_ybn(filepath)
                     elif YNV.file_extension in filepath:
                         import_ynv(filepath)
-                    elif YCD.file_extension in filepath:
+                    elif filepath.lower().endswith(YCD.file_extension):
                         import_ycd(filepath)
+                    elif filepath.lower().endswith(YAD.file_extension):
+                        import_yad(filepath)
                     elif YMAP.file_extension in filepath:
                         import_ymap(filepath)
                     else:
@@ -180,7 +182,7 @@ class SOLLUMZ_OT_export_assets(bpy.types.Operator, TimedOperator):
     bl_label = "Export CodeWalker XML"
 
     filter_glob: bpy.props.StringProperty(
-        default=f"*{YDR.file_extension};*{YDD.file_extension};*{YFT.file_extension};*{YBN.file_extension};*{YCD.file_extension};*{YMAP.file_extension};",
+        default=f"*{YDR.file_extension};*{YDD.file_extension};*{YFT.file_extension};*{YBN.file_extension};*{YCD.file_extension};*{YAD.file_extension};*{YMAP.file_extension};",
         options={"HIDDEN", "SKIP_SAVE"},
         maxlen=255,
     )
@@ -239,8 +241,10 @@ class SOLLUMZ_OT_export_assets(bpy.types.Operator, TimedOperator):
                         filepath = self.get_filepath(obj, YFT.file_extension)
                         success = export_yft(obj, filepath)
                     elif obj.sollum_type == SollumType.CLIP_DICTIONARY:
-                        filepath = self.get_filepath(obj, YCD.file_extension)
-                        success = export_ycd(obj, filepath)
+                        set_import_export_current_game(obj.sollum_game_type)
+                        is_yad = obj.sollum_game_type == SollumzGame.RDR and obj.animation_dictionary_format == "YAD"
+                        filepath = self.get_filepath(obj, YAD.file_extension if is_yad else YCD.file_extension)
+                        success = export_yad(obj, filepath) if is_yad else export_ycd(obj, filepath)
                     elif obj.sollum_type == SollumType.BOUND_COMPOSITE:
                         filepath = self.get_filepath(obj, YBN.file_extension)
                         success = export_ybn(obj, filepath)

@@ -10,6 +10,20 @@ from ..ydr.ui import SOLLUMZ_PT_BONE_PANEL
 from ..tools.animationhelper import is_any_sollumz_animation_obj, is_uv_animation_supported
 
 
+def draw_animation_dictionary_properties(self, context):
+    obj = context.active_object
+    if obj and obj.sollum_type == SollumType.CLIP_DICTIONARY and obj.sollum_game_type == SollumzGame.RDR:
+        self.layout.prop(obj, "animation_dictionary_format")
+        if obj.animation_dictionary_format == "YAD":
+            row = self.layout.row()
+            row.enabled = False
+            row.prop(obj, "rdr_ycd_target", text="Linked YCD")
+        elif obj.rdr_external_animations:
+            for entry in obj.rdr_animation_dictionaries:
+                self.layout.label(text=f"Dictionary {entry.dict_index}: " +
+                    (entry.yad.name if entry.yad else "Unlinked YAD"), icon="NLA")
+
+
 def draw_clip_properties(self, context):
     obj = context.active_object
     if obj and obj.sollum_type == SollumType.CLIP:
@@ -73,6 +87,9 @@ def template_animation_target_ID(layout: bpy.types.UILayout, data, property: str
     row.use_property_decorate = True
 
     type_name = getattr(data, type_property)
+    if type_name == "YCD":
+        row.prop(data, "sollumz_animations_target_ycd", text="")
+        return
     if type_name in animation_target_id_type_to_collection_name:
         data_prop = getattr(data, property)
         data_prop_type_name = animation_target_id_python_type_to_type.get(type(data_prop), None)
@@ -389,7 +406,7 @@ class SOLLUMZ_PT_CLIP_ANIMATIONS(bpy.types.Panel):
         for animation_index, clip_animation in enumerate(clip_properties.animations):
             box = layout.box()
 
-            label = clip_animation.animation.name if clip_animation.animation else None
+            label = clip_animation.animation.name if clip_animation.animation else clip_animation.rdr_animation_hash or None
             delete_op = draw_item_box_header(box, clip_animation, label, ycd_ops.SOLLUMZ_OT_clip_delete_animation)
             delete_op.animation_index = animation_index
 
@@ -397,6 +414,8 @@ class SOLLUMZ_PT_CLIP_ANIMATIONS(bpy.types.Panel):
                 box.use_property_split = True
                 box.use_property_decorate = False
                 box.prop(clip_animation, "animation", text="Animation")
+                if clip_animation.rdr_pending:
+                    box.label(text=f"Link YAD dictionary {clip_animation.rdr_dict_index} using Set Animations Target", icon="INFO")
 
                 draw_range_properties(box, clip_animation, "start_frame", "end_frame", "Frame Range")
                 if obj.sollum_game_type == SollumzGame.RDR:
@@ -693,6 +712,7 @@ draw_handlers = []
 
 
 def register():
+    SOLLUMZ_PT_OBJECT_PANEL.append(draw_animation_dictionary_properties)
     SOLLUMZ_PT_OBJECT_PANEL.append(draw_clip_properties)
     SOLLUMZ_PT_OBJECT_PANEL.append(draw_animation_properties)
 
@@ -703,6 +723,7 @@ def register():
 
 
 def unregister():
+    SOLLUMZ_PT_OBJECT_PANEL.remove(draw_animation_dictionary_properties)
     SOLLUMZ_PT_OBJECT_PANEL.remove(draw_clip_properties)
     SOLLUMZ_PT_OBJECT_PANEL.remove(draw_animation_properties)
 

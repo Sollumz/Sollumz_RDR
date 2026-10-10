@@ -3,7 +3,7 @@ from typing import Iterable
 import bpy
 import math
 from mathutils import Matrix, Vector
-from ..sollumz_properties import SollumType
+from ..sollumz_properties import SollumType, SollumzGame
 from ..tools.animationhelper import retarget_animation, get_target_from_id, update_uv_clip_hash, get_scene_fps
 
 
@@ -16,7 +16,22 @@ def animations_filter(self, object):
     if active_object.sollum_type != SollumType.CLIP:
         return False
 
-    return object.sollum_type == SollumType.ANIMATION and active_object.parent.parent == object.parent.parent
+    from .yadlink import dictionary_root
+    root = dictionary_root(active_object)
+    animation_root = dictionary_root(object)
+    return object.sollum_type == SollumType.ANIMATION and (root == animation_root or
+        (root is not None and any(entry.yad == animation_root for entry in root.rdr_animation_dictionaries)))
+
+
+def ycd_target_filter(self, obj):
+    return (obj.sollum_type == SollumType.CLIP_DICTIONARY and obj.sollum_game_type == SollumzGame.RDR
+            and obj.animation_dictionary_format == "YCD")
+
+
+class RDRAnimationDictionaryLink(bpy.types.PropertyGroup):
+    dict_index: bpy.props.IntProperty(default=0, min=0, max=65535)
+    resource_name: bpy.props.StringProperty()
+    yad: bpy.props.PointerProperty(type=bpy.types.Object)
 
 
 ClipAttributeTypes = [
@@ -94,6 +109,11 @@ class ClipProperty(bpy.types.PropertyGroup):
 
 
 class ClipAnimation(bpy.types.PropertyGroup):
+    rdr_animation_hash: bpy.props.StringProperty(options={"HIDDEN"})
+    rdr_dict_index: bpy.props.IntProperty(default=0, min=0, options={"HIDDEN"})
+    rdr_pending: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    rdr_start_time: bpy.props.FloatProperty(options={"HIDDEN"})
+    rdr_end_time: bpy.props.FloatProperty(options={"HIDDEN"})
     rdr_part_index: bpy.props.IntProperty(name="Part", default=0, min=0)
     rdr_part_duration: bpy.props.FloatProperty(name="Part Duration", default=0, min=0, subtype="TIME_ABSOLUTE")
     rdr_speed: bpy.props.FloatProperty(name="Speed", default=0, min=0, description="Zero calculates speed from part duration")
@@ -157,6 +177,8 @@ AnimationTargetIDTypes = [
 
 
 class AnimationProperties(bpy.types.PropertyGroup):
+    rdr_dict_index: bpy.props.IntProperty(default=0, min=0, max=65535, options={"HIDDEN"})
+
     def on_target_update(self, context):
         # print(f"Target updated: {self.target_id} (prev {self.target_id_prev})")
         if self.target_id != self.target_id_prev and self.action:
@@ -411,6 +433,14 @@ def unregister_tracks(cls, inline=False):
 
 
 def register():
+    bpy.types.Object.rdr_external_animations = bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    bpy.types.Object.rdr_animation_dictionaries = bpy.props.CollectionProperty(type=RDRAnimationDictionaryLink)
+    bpy.types.Object.rdr_ycd_target = bpy.props.PointerProperty(type=bpy.types.Object, poll=ycd_target_filter)
+    bpy.types.Object.animation_dictionary_format = bpy.props.EnumProperty(
+        name="Export Format",
+        items=(("YCD", "YCD", "Clip dictionary; linked YADs use external references"),
+               ("YAD", "YAD", "Standalone animation dictionary; excludes clips")),
+        default="YCD")
     bpy.types.Object.clip_properties = bpy.props.PointerProperty(
         type=ClipProperties)
     bpy.types.Object.animation_properties = bpy.props.PointerProperty(
@@ -428,10 +458,18 @@ def register():
     bpy.types.Scene.sollumz_animations_target_id = bpy.props.PointerProperty(
         name="Target", type=bpy.types.ID, options={"HIDDEN", "SKIP_SAVE"})
     bpy.types.Scene.sollumz_animations_target_id_type = bpy.props.EnumProperty(
-        name="Target Type", items=AnimationTargetIDTypes, default="ARMATURE", options={"HIDDEN", "SKIP_SAVE"})
+        name="Target Type", items=AnimationTargetIDTypes + [("YCD", "YCD", "Link a YAD to a clip dictionary", "NLA", 3)],
+        default="ARMATURE", options={"HIDDEN", "SKIP_SAVE"})
+    bpy.types.Scene.sollumz_animations_target_ycd = bpy.props.PointerProperty(
+        name="YCD", type=bpy.types.Object, poll=ycd_target_filter, options={"HIDDEN", "SKIP_SAVE"})
 
 
 def unregister():
+    del bpy.types.Object.rdr_external_animations
+    del bpy.types.Object.rdr_animation_dictionaries
+    del bpy.types.Object.rdr_ycd_target
+    del bpy.types.Scene.sollumz_animations_target_ycd
+    del bpy.types.Object.animation_dictionary_format
     del bpy.types.Object.clip_properties
     del bpy.types.Object.animation_properties
 

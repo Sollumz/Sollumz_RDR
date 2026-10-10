@@ -17,12 +17,26 @@ class SOLLUMZ_OT_animations_set_target(SOLLUMZ_OT_base, bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
+        if context.scene.sollumz_animations_target_id_type == "YCD":
+            from .yadlink import dictionary_root
+            roots = {dictionary_root(obj) for obj in context.selected_objects}
+            return (context.scene.sollumz_animations_target_ycd is not None and bool(roots) and
+                    all(root is not None and root.animation_dictionary_format == "YAD" for root in roots))
         return (len(context.selected_objects) > 0 and
                 any(is_any_sollumz_animation_obj(obj) for obj in context.selected_objects) and
                 context.scene.sollumz_animations_target_id is not None)
 
     def run(self, context):
         scene = context.scene
+        if scene.sollumz_animations_target_id_type == "YCD":
+            from .yadlink import dictionary_root, link_yad_to_ycd
+            roots = {dictionary_root(obj) for obj in context.selected_objects}
+            for root in roots:
+                link_yad_to_ycd(root, scene.sollumz_animations_target_ycd, validate_only=True)
+            for root in roots:
+                link_yad_to_ycd(root, scene.sollumz_animations_target_ycd)
+            scene.sollumz_animations_target_ycd = None
+            return {"FINISHED"}
         animations_objects = self.collect_animations_objects(context)
         target_id = scene.sollumz_animations_target_id
         target_id_type = scene.sollumz_animations_target_id_type

@@ -616,7 +616,7 @@ def sequence_data_from_frames_data(
     return sequence_data
 
 
-def animation_from_object(animation_obj: bpy.types.Object) -> Optional[ycdxml.Animation]:
+def animation_from_object(animation_obj: bpy.types.Object, preserve_dict_index: bool = False) -> Optional[ycdxml.Animation]:
     animation_properties = animation_obj.animation_properties
     action = animation_properties.action
     is_rdr = import_export_current_game() == SollumzGame.RDR
@@ -629,6 +629,8 @@ def animation_from_object(animation_obj: bpy.types.Object) -> Optional[ycdxml.An
 
     animation_type = ycdxml.RDRAnimation if is_rdr else ycdxml.Animation
     animation = animation_type()
+    if is_rdr and preserve_dict_index:
+        animation.dict_index = animation_properties.rdr_dict_index
     animation.hash = animation_properties.hash
     if is_rdr:
         animation.hash = animation.hash.removeprefix("pack:/").removesuffix(".anim")
@@ -881,8 +883,10 @@ def clip_from_object(clip_obj: bpy.types.Object) -> ycdxml.Clip:
     return xml_clip
 
 
-def clip_dictionary_from_object(obj: bpy.types.Object) -> Optional[ycdxml.ClipDictionary]:
+def clip_dictionary_from_object(obj: bpy.types.Object, include_clips: bool = True) -> Optional[ycdxml.ClipDictionary]:
     is_rdr = import_export_current_game() == SollumzGame.RDR
+    if is_rdr and include_clips and obj.rdr_external_animations:
+        return external_clip_dictionary_from_object(obj)
     clip_dictionary = ycdxml.RDRClipDictionary() if is_rdr else ycdxml.ClipDictionary()
     if is_rdr:
         clip_dictionary.name = obj.name
@@ -898,16 +902,16 @@ def clip_dictionary_from_object(obj: bpy.types.Object) -> Optional[ycdxml.ClipDi
             clips_obj = child_obj
 
     any_animation_export_failed = False
-    if animations_obj is None or clips_obj is None:
+    if animations_obj is None or (include_clips and clips_obj is None):
         raise ValueError("Clip dictionary requires Animations and Clips containers.")
     animation_objects = set(animations_obj.children)
-    if is_rdr:
+    if is_rdr and include_clips:
         for clip_obj in clips_obj.children:
             for link in clip_obj.clip_properties.animations:
                 if link.animation not in animation_objects:
                     raise ValueError("Clip must link an Animation in this dictionary's Animations container.")
     for animation_obj in animations_obj.children:
-        animation = animation_from_object(animation_obj)
+        animation = animation_from_object(animation_obj, preserve_dict_index=not include_clips)
         if animation is None:
             any_animation_export_failed = True
             continue
@@ -924,7 +928,7 @@ def clip_dictionary_from_object(obj: bpy.types.Object) -> Optional[ycdxml.ClipDi
         # If any animation had some error, it's not safe to continue exporting the clips
         return None
 
-    for clip_obj in clips_obj.children:
+    for clip_obj in clips_obj.children if include_clips else ():
         clip = clip_from_object(clip_obj)
 
         clip_dictionary.clips.append(clip)
@@ -938,6 +942,53 @@ def clip_dictionary_from_object(obj: bpy.types.Object) -> Optional[ycdxml.ClipDi
         raise ValueError("Dictionary has no Actions.")
 
     return clip_dictionary
+
+
+def external_clip_dictionary_from_object(obj):
+    from .yadlink import dictionary_animations, dictionary_links, resource_name
+    from .ycdimport import rdr_animation_name_hash
+    if dictionary_animations(obj):
+        raise ValueError("External YCD animations must belong to linked YAD dictionaries.")
+    entries = sorted(obj.rdr_animation_dictionaries, key=lambda entry: entry.dict_index)
+    if not entries or [entry.dict_index for entry in entries] != list(range(len(entries))):
+        raise ValueError("External dictionary indices must be consecutive, starting at zero.")
+    dictionary = ycdxml.RDRClipDictionary()
+    dictionary.name = obj.name
+    owners = {}
+    for entry in entries:
+        yad = entry.yad
+        if (yad is None or yad.animation_dictionary_format != "YAD" or yad.rdr_ycd_target != obj):
+            raise ValueError(f"Dictionary {entry.dict_index} needs a linked YAD before export.")
+        name = resource_name(yad)
+        validate_rdr_animation_name(name)
+        dictionary.animation_imports.append(dictionary.AnimationImportsList.Import("Item", name))
+        for animation in dictionary_animations(yad):
+            owners[animation] = entry.dict_index
+    links = dictionary_links(obj)
+    if not links:
+        raise ValueError("External YCD has no clip animation links.")
+    seen = {}
+    for link in links:
+        if link.rdr_pending or link.animation not in owners:
+            raise ValueError("Clip contains an unresolved or unlinked YAD animation.")
+        animation = link.animation
+        name = animation.animation_properties.hash.removeprefix("pack:/").removesuffix(".anim")
+        key = rdr_animation_name_hash(name)
+        index = owners[animation]
+        if key in seen and seen[key] != index:
+            raise ValueError("Animation hash is ambiguous across linked YADs.")
+        if key not in seen:
+            entry = ycdxml.RDRAnimationLookup()
+            entry.name, entry.dict_index = name, index
+            dictionary.animation_lookup.append(entry)
+            seen[key] = index
+    for container in obj.children:
+        if container.sollum_type == SollumType.CLIPS:
+            for clip_obj in container.children:
+                clip = clip_from_object(clip_obj)
+                clip.dictionary = dictionary.name
+                dictionary.clips.append(clip)
+    return dictionary
 
 
 def export_ycd(obj: bpy.types.Object, filepath: str) -> bool:
@@ -956,4 +1007,32 @@ def export_ycd(obj: bpy.types.Object, filepath: str) -> bool:
             clip.unknown30 = jenkhash.GenerateData(tostring(clip.to_xml())) or 1
 
     clip_dict.write_xml(filepath)
+    return True
+
+
+def export_yad(obj: bpy.types.Object, filepath: str) -> bool:
+    if obj.sollum_game_type != SollumzGame.RDR:
+        raise ValueError("YAD export requires an RDR animation dictionary.")
+    path = Path(filepath)
+    if not path.name.lower().endswith(ycdxml.YAD.file_extension):
+        raise ValueError("Output must end in .yad.xml.")
+    name = path.name[:-len(ycdxml.YAD.file_extension)]
+    validate_rdr_animation_name(name)
+    if obj.rdr_ycd_target is not None:
+        from .yadlink import resource_name
+        if name != resource_name(obj):
+            raise ValueError("Linked YAD output basename must match its dictionary object's export name.")
+    from ..sollumz_properties import set_import_export_current_game
+    previous_game = import_export_current_game()
+    try:
+        set_import_export_current_game(SollumzGame.RDR)
+        clip_dict = clip_dictionary_from_object(obj, include_clips=False)
+    finally:
+        set_import_export_current_game(previous_game)
+    if clip_dict is None:
+        return False
+    dictionary = ycdxml.RDRStandaloneAnimationDictionary()
+    dictionary.name = name
+    dictionary.animations = clip_dict.animations
+    ycdxml.YAD.write_xml(dictionary, filepath)
     return True
