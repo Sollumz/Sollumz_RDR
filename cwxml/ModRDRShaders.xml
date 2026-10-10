@@ -10481,7 +10481,7 @@
       <Item buffer="0" length="4" name="ripplebumpiness" offset="0" type="CBuffer" value_type="float" x="1" />
       <Item buffer="0" length="4" name="ripplescale" offset="4" type="CBuffer" value_type="float" x="0.3" />
       <Item buffer="1" length="16" name="fogcolor" offset="0" type="CBuffer" value_type="float4" w="0.619" x="0.262745" y="0.301961" z="0.294118" />
-      <Item index="5" name="PzciMPA_0x2B9B314F" sampler="15" type="Sampler" />
+      <Item index="9" name="PzciMPA_0x2B9B314F" sampler="15" type="Sampler" />
       <Item index="10" name="gcGTKIA_0x309920E8" sampler="16" type="Sampler" />
     </Params>
     <Semantics>

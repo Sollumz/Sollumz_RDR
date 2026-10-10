@@ -31,6 +31,7 @@ VERT_ATTR_DTYPES = {
     "P": ["Position", np.float32, 3],
     "N": ["Normal", np.float32, 4],
     "X": ["Tangent", np.float32, 4],
+    "Y": ["Binormal", np.float32, 4],
     "W": ["BlendWeights", np.uint32, 4],
     "I": ["BlendIndices", np.uint32, 4],
     "C": ["Colour", np.uint32, 4],
@@ -38,6 +39,7 @@ VERT_ATTR_DTYPES = {
 }
 
 semantic_layout = None
+semantic_formats = None
 
 
 def get_str_type(value: str):
@@ -103,6 +105,8 @@ class VertexLayout(ElementTree):
 
         data_elem = element.find("Semantics")
         new._load_data_from_str(data_elem.text)
+        global semantic_formats
+        semantic_formats = list(new.formats) if new.formats else None
         return new
     
     def to_xml(self):
@@ -141,7 +145,10 @@ class VerticesProperty(ElementProperty):
         new_dtype = []
         current_semantic = None
         count = -1
-        for this_semantic in semantic_layout:
+        format_components = {"1": 1, "2": 2, "3": 3, "4": 4,
+                             "5": 4, "6": 4, "7": 2, "8": 4, "9": 4,
+                             "A": 4, "B": 2, "C": 2}
+        for index, this_semantic in enumerate(semantic_layout):
             if current_semantic is None:
                 current_semantic = this_semantic
             elif current_semantic != this_semantic:
@@ -149,6 +156,8 @@ class VerticesProperty(ElementProperty):
                 count = -1
             
             entry = VERT_ATTR_DTYPES[this_semantic].copy()
+            if semantic_formats and index < len(semantic_formats):
+                entry[2] = format_components.get(semantic_formats[index], entry[2])
             if count == -1 and entry[0] in ("Colour", "TexCoord"):
                 entry[0] = entry[0] + "0"
             elif count >= 0:

@@ -468,6 +468,7 @@ def create_geometries_xml(
                 ["Position", "P", '3'],
                 ["Normal", "N", '9'],
                 ["Tangent", "X", '9'],
+                ["Binormal", "Y", '9'],
                 ["BlendWeights", "W", '5'],
                 ["BlendIndices", "I", '6'],
                 ["Colour", "C", '5'],
@@ -1213,6 +1214,8 @@ def create_shader_parameters_list_template(shader_def: Optional[ShaderDef]) -> l
         match param_def.type:
             case ShaderParameterType.TEXTURE:
                 param = TextureShaderParameter()
+                if current_game() == SollumzGame.RDR:
+                    param.index = param_def.index
             case (ShaderParameterType.FLOAT |
                   ShaderParameterType.FLOAT2 |
                   ShaderParameterType.FLOAT3 |
@@ -1228,7 +1231,7 @@ def create_shader_parameters_list_template(shader_def: Optional[ShaderDef]) -> l
             case ShaderParameterType.SAMPLER:
                 param = SamplerShaderParameter()
                 param.index = param_def.index
-                param.sampler = param_def.x
+                param.x = param_def.x
             case ShaderParameterType.CBUFFER:
                 param = CBufferShaderParameter()
                 param.buffer = param_def.buffer
@@ -1270,54 +1273,97 @@ def get_shaders_from_blender(materials):
 
     for material in materials:
         shader = Shader()
-        shader.name = material.shader_properties.name
-        shader_def = ShaderManager.find_shader(material.shader_properties.filename, current_game())
+        properties = material.shader_properties
+        shader.name = properties.name
+        shader_def = ShaderManager.find_shader(properties.filename, current_game())
+        native_layout = (current_game() == SollumzGame.RDR
+                         and properties.parameter_layout_filename == properties.filename)
         if current_game() == SollumzGame.GTA:
-            shader.filename = material.shader_properties.filename
-            shader.render_bucket = RenderBucket[material.shader_properties.renderbucket].value
+            shader.filename = properties.filename
+            shader.render_bucket = RenderBucket[properties.renderbucket].value
             shader.parameters = create_shader_parameters_list_template(shader_def)
         elif current_game() == SollumzGame.RDR:
-            shader.draw_bucket = RenderBucket[material.shader_properties.renderbucket].value
-            shader.draw_bucket_flag = shader_def.render_bucket_flag
+            shader.draw_bucket = RenderBucket[properties.renderbucket].value
+            shader.draw_bucket_flag = properties.draw_bucket_flag if native_layout else shader_def.render_bucket_flag
+            shader.unknown_3e = properties.unknown_3e if native_layout else 0
             shader.parameters = RDRParameters()
-            shader.parameters.buffer_size = ' '.join([str(elem) for elem in shader_def.buffer_size])
-            shader.parameters.items = create_shader_parameters_list_template(shader_def)
+            shader.parameters.buffer_size = properties.buffer_sizes if native_layout else ' '.join(map(str, shader_def.buffer_size or []))
+            if native_layout:
+                parameter_types = {"Texture": TextureShaderParameter, "CBuffer": CBufferShaderParameter,
+                                   "Sampler": SamplerShaderParameter, "Unknown": UnknownShaderParameter,
+                                   "Vector": VectorShaderParameter, "Array": ArrayShaderParameter}
+                for layout in properties.parameter_layout:
+                    param = parameter_types[layout.type]()
+                    param.name = layout.name
+                    if layout.type == "Texture":
+                        param.index = layout.index
+                        param.texture_name = layout.texture_name
+                        param.flags = int(layout.texture_flags)
+                    elif layout.type in {"Sampler", "Unknown"}:
+                        param.index = layout.index
+                        if layout.type == "Sampler":
+                            param.x = int(layout.values[0].value[0])
+                    else:
+                        if layout.type == "CBuffer":
+                            param.buffer = layout.buffer
+                            param.offset = layout.offset
+                            param.length = layout.length
+                            param.is_array = layout.is_array
+                        if layout.is_array:
+                            param.values = [Vector(row.value) for row in layout.values]
+                        elif layout.values:
+                            for component, value in zip('xyzw'[:layout.num_components], layout.values[0].value):
+                                setattr(param, component, value)
+                    shader.parameters.items.append(param)
+            else:
+                shader.parameters.items = create_shader_parameters_list_template(shader_def)
 
         for node in material.node_tree.nodes:
-            param = None
+            # RDR's parameter slots and buffer layout come from the imported material,
+            # or from its shader definition for newly created materials.
+            if current_game() == SollumzGame.RDR:
+                param = next((p for p in shader.parameters.items
+                              if jenkhash.GenerateCaseSensitive(p.name) == jenkhash.GenerateCaseSensitive(node.name)), None)
+                if param is None:
+                    continue
+                if isinstance(node, bpy.types.ShaderNodeTexImage) and param.type == "Texture":
+                    param.index = node.texture_properties.index
+                    texture_name = node.sollumz_texture_name
+                    if not native_layout or texture_name.casefold() != (param.texture_name or '').casefold():
+                        param.texture_name = '' if texture_name == 'None' else texture_name
+                    if not native_layout:
+                        param.flags = node.texture_properties.extra_flags or 0x10000000
+                elif isinstance(node, SzShaderNodeParameter):
+                    if param.type == "Sampler":
+                        param.x = int(node.get(0))
+                        param.index = node.extra_property.index
+                    elif param.type in {"CBuffer", "Vector", "Array"}:
+                        is_array = param.type == "Array" or (param.type == "CBuffer" and param.is_array)
+                        if is_array:
+                            param.values = [Vector(tuple(node.get(row * node.num_cols + col)
+                                                         if col < node.num_cols else 0.0 for col in range(4)))
+                                            for row in range(node.num_rows)]
+                        else:
+                            for i, component in enumerate('xyzw'[:node.num_cols]):
+                                setattr(param, component, node.get(i))
+                        if param.type == "CBuffer":
+                            param.buffer = int(node.extra_property.buffer)
+                            param.offset = int(node.extra_property.offset)
+                            if not native_layout:
+                                param.length = node.num_cols * node.num_rows * 4
+                continue
 
+            param = None
             if isinstance(node, bpy.types.ShaderNodeTexImage):
                 param_def = shader_def.parameter_map.get(node.name, None)
                 if not param_def:
                     continue
-
                 param = TextureShaderParameter()
-                if current_game() == SollumzGame.GTA:
-                    param.texture_name = node.sollumz_texture_name
-                elif current_game() == SollumzGame.RDR:
-                    param.index = node.texture_properties.index
-                    if node.sollumz_texture_name == "None":
-                        delattr(param, "texture_name")
-                        delattr(param, "flags")
-                    else:
-                        param.texture_name = node.sollumz_texture_name
-                        flags = node.texture_properties.extra_flags
-                        if flags != None and flags != 0:
-                            param.flags = flags
-                        else:
-                            delattr(param, "flags")
+                param.texture_name = node.sollumz_texture_name
             elif isinstance(node, SzShaderNodeParameter):
                 param_def = shader_def.parameter_map.get(node.name, None)
-
-                if current_game() == SollumzGame.RDR:
-                    for key, value in shader_def.parameter_map.items():
-                        if jenkhash.GenerateCaseSensitive(node.name) == jenkhash.GenerateCaseSensitive(key):
-                            param_def = value
-                            break
-
                 if not param_def:
                     continue
-
                 is_vector = isinstance(param_def, ShaderParameterFloatVectorDef) and not param_def.is_array
                 if is_vector:
                     param = VectorShaderParameter()
@@ -1327,27 +1373,15 @@ def get_shaders_from_blender(materials):
                     param.w = node.get(3) if node.num_cols > 3 else 0.0
                 elif isinstance(param_def, ShaderParameterCBufferDef):
                     param = CBufferShaderParameter()
-                    param.x = node.get(0)
-                    buffer_length = 4
-                    if node.num_rows <= 1:
-                        if node.num_cols > 1:
-                            param.y = node.get(1)
-                            buffer_length += 4
-                        if node.num_cols > 2:
-                            param.z = node.get(2)
-                            buffer_length += 4
-                        if node.num_cols > 3:
-                            param.w = node.get(3)
-                            buffer_length += 4
-                        param.buffer = node.extra_property.buffer
-                        param.offset = node.extra_property.offset
-                        param.length = buffer_length
-                    else:
+                    param.buffer = node.extra_property.buffer
+                    param.offset = node.extra_property.offset
+                    param.length = node.num_rows * node.num_cols * 4
+                    if node.num_rows > 1:
                         param.is_array = True
-                        param.values = [Vector((0,0,0,0)) for _ in range(node.num_rows)]
-                        param.buffer = node.extra_property.buffer
-                        param.offset = node.extra_property.offset
-                        param.length = node.num_rows * node.num_cols * 4
+                        param.values = [Vector((0, 0, 0, 0)) for _ in range(node.num_rows)]
+                    else:
+                        for i, component in enumerate('xyzw'[:node.num_cols]):
+                            setattr(param, component, node.get(i))
                 elif isinstance(param_def, ShaderParameterSamplerDef):
                     param = SamplerShaderParameter()
                     param.x = node.get(0)
@@ -1361,27 +1395,16 @@ def get_shaders_from_blender(materials):
                         y = node.get(i + 1) if node.num_cols > 1 else 0.0
                         z = node.get(i + 2) if node.num_cols > 2 else 0.0
                         w = node.get(i + 3) if node.num_cols > 3 else 0.0
-
                         array_values.append(Vector((x, y, z, w)))
-
                     param.values = array_values
 
             if param is not None:
                 param.name = node.name
-                if current_game() == SollumzGame.GTA:
-                    parameter_index = next((i for i, x in enumerate(shader.parameters) if x.name == param.name), None)
-                    if parameter_index is None:
-                        shader.parameters.append(param)
-                    else:
-                        shader.parameters[parameter_index] = param
-
-                elif current_game() == SollumzGame.RDR:
-                    parameter_index = next((i for i, x in enumerate(shader.parameters.items) if jenkhash.GenerateCaseSensitive(x.name) == jenkhash.GenerateCaseSensitive(param.name)), None)
-
-                    if parameter_index is None:
-                        shader.parameters.items.append(param)
-                    else:
-                        shader.parameters.items[parameter_index] = param
+                parameter_index = next((i for i, x in enumerate(shader.parameters) if x.name == param.name), None)
+                if parameter_index is None:
+                    shader.parameters.append(param)
+                else:
+                    shader.parameters[parameter_index] = param
 
         shaders.append(shader)
 

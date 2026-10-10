@@ -7,7 +7,6 @@ from typing import NamedTuple, Tuple
 from ..tools.drawablehelper import get_model_xmls_by_lod
 from ..sollumz_properties import LODLevel, SollumzGame, import_export_current_game as current_game, set_import_export_current_game
 from ..cwxml.drawable import Bone, Drawable, DrawableModel, Geometry, LodList, VertexBuffer
-from ..cwxml.drawable_RDR import VERT_ATTR_DTYPES
 
 
 class MeshData(NamedTuple):
@@ -315,7 +314,14 @@ def get_model_joined_vert_arr(geoms: list[Geometry]) -> NDArray:
         geom_vert_arr = np.zeros(len(vert_arr), dtype=arr_dtype)
 
         for name in vert_arr.dtype.names:
-            geom_vert_arr[name] = vert_arr[name]
+            source = vert_arr[name]
+            destination = geom_vert_arr[name]
+            if current_game() == SollumzGame.RDR and source.ndim == 2 and destination.shape[1] != source.shape[1]:
+                # A model may mix Float3 and packed XYZW normals. Preserve the
+                # available components and leave absent components at zero.
+                destination[:, :source.shape[1]] = source
+            else:
+                destination[:] = source
 
         vert_arrs.append(geom_vert_arr)
 
@@ -326,18 +332,17 @@ def get_model_vert_buffer_dtype(geoms: list[Geometry]) -> np.dtype:
     """Get the dtype of the structured array of the joined geometry vertex buffers."""
     arr_dtype = []    
     if current_game() == SollumzGame.RDR:
-        merged_dtype_names = []
+        fields = {}
         for geom in geoms:
             geo_dtype = geom.vertices.dtype
-            for dtype in geo_dtype.names:
-                for attr_name, attr_dtype in VERT_ATTR_DTYPES.items():
-                    if attr_dtype[0] in dtype:
-                        x = list(attr_dtype.copy())
-                        x[0] = dtype
-                        if dtype not in merged_dtype_names:
-                            arr_dtype.append(tuple(x))
-                            merged_dtype_names.append(dtype)
-        del merged_dtype_names[:]; del merged_dtype_names
+            for name in geo_dtype.names:
+                field = geo_dtype.fields[name][0]
+                if name in fields and field.shape != fields[name].shape:
+                    existing = fields[name]
+                    field = np.dtype((np.result_type(existing.base, field.base),
+                                      (max(existing.shape[0], field.shape[0]),)))
+                fields[name] = field
+        arr_dtype = list(fields.items())
     else:
         used_attrs: set[Tuple] = set(
             name for geom in geoms for name in geom.vertex_buffer.data.dtype.names)

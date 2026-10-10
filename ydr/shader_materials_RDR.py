@@ -7,7 +7,8 @@ from ..cwxml.shader import (
     ShaderParameterType,
 )
 
-from .shader_materials_SHARED import ShaderBuilder, create_image_node, create_parameter_node, link_value_shader_parameters, link_normal, try_get_node, link_diffuse, create_decal_nodes, get_uv_map_name
+from .shader_materials_SHARED import ShaderBuilder, create_image_node, create_parameter_node, link_value_shader_parameters, try_get_node, get_uv_map_name
+from ..shared.shader_nodes import SzShaderNodeParameter
 
 
 def create_tint_nodes(
@@ -24,6 +25,7 @@ def create_tint_nodes(
     mix = node_tree.nodes.new("ShaderNodeMixRGB")
     mix.name = "tint_mix_node"
     mix.blend_type = "MULTIPLY"
+    mix.inputs["Fac"].default_value = 1.0
     links.new(attr.outputs["Color"], mix.inputs[2])
     links.new(diffuse_tex.outputs[0], mix.inputs[1])
     links.new(mix.outputs[0], bsdf.inputs["Base Color"])
@@ -53,9 +55,9 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
                 imgnode.texture_properties.game_type = SollumzGame.RDR
                 if param.name == "diffusetex":
                     texture = imgnode
-                elif param.name == "bumptex":
+                elif param.name in {"bumptex", "bumptexture", "lyr0normaltex"}:
                     bumptex = imgnode
-                elif param.name == "speculartex":
+                elif param.name in {"speculartex", "speculartexture", "lyr0materialatex"}:
                     spectex = imgnode
                 elif param.name == "DetailSampler":
                     detltex = imgnode
@@ -64,11 +66,10 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
                 elif param.name == "distanceMapSampler":
                     texture = imgnode
                     is_distance_map = True
-                elif param.name == "diffusetex2":
+                elif param.name in {"diffusetex2", "lyr1diffusetex"}:
                     texture2 = imgnode
-                else:
-                    if not texture:
-                        texture = imgnode
+                elif param.name == "lyr0diffusetex":
+                    texture = imgnode
             case (ShaderParameterType.FLOAT |
                   ShaderParameterType.FLOAT2 |
                   ShaderParameterType.FLOAT3 |
@@ -114,17 +115,16 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
 
     # is_emissive = True if filename in ShaderManager.em_shaders else False
 
-    if not use_decal:
-        if use_diff:
-            if use_diff2:
-                texture = link_diffuses(b, texture, texture2)
-            else:
-                link_diffuse(b, texture)
-    else:
-        create_decal_nodes(b, texture, decalflag)
+    diffuse_texture = texture
+    if use_diff:
+        if use_diff2:
+            texture = link_diffuses(b, texture, texture2)
+        else:
+            node_tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
+    link_alpha(b, diffuse_texture)
 
 
-    if use_tint:
+    if use_tint and texture:
         create_tint_nodes(b, texture)
 
     if use_bump:
@@ -136,7 +136,7 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
     if use_spec:
         link_specular(b, spectex)
     else:
-        bsdf.inputs["Specular IOR Level"].default_value = 0
+        bsdf.inputs["Roughness"].default_value = 1.0
 
     # if is_emissive:
     #     create_emissive_nodes(b)
@@ -155,7 +155,8 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
     #     bsdf.inputs["Coat Weight"].default_value = 1.0
 
     # link value parameters
-    link_value_shader_parameters(b)
+    link_rdr_value_parameters(b)
+    link_emission(b, diffuse_texture)
 
     if bpy.app.version < (4, 2, 0):
         mat.blend_method = blend_mode
@@ -164,44 +165,17 @@ def RDR_create_basic_shader_nodes(b: ShaderBuilder):
 
 
 def link_specular(b: ShaderBuilder, spctex):
-    node_tree = b.node_tree
-    bsdf = b.bsdf
-    links = node_tree.links
-
-    other_mix = try_get_node(node_tree, "ShaderNodeMixRGB")
-    mix = node_tree.nodes.new("ShaderNodeMixRGB")
-
-    diffuse_node = node_tree.nodes.new('ShaderNodeBsdfDiffuse')
-
-    shader_rgb = node_tree.nodes.new('ShaderNodeShaderToRGB')
-    links.new(diffuse_node.outputs["BSDF"], shader_rgb.inputs["Shader"])
-
-    color_ramp = node_tree.nodes.new('ShaderNodeValToRGB')
-    color_ramp.color_ramp.elements[0].position = 0.0
-    color_ramp.color_ramp.elements[1].position = 1.0
-    color_ramp.color_ramp.elements[0].color = (1,1,1,1)
-    color_ramp.color_ramp.elements[1].color = (0,0,0,1)
-    links.new(shader_rgb.outputs["Color"], color_ramp.inputs["Fac"])
-
-    links.new(color_ramp.outputs["Color"], mix.inputs["Fac"])
+    link_material_channels(b, spctex.outputs["Color"])
 
 
-    separate_rgb = node_tree.nodes.new(type='ShaderNodeSeparateColor')
-    links.new(spctex.outputs["Color"], separate_rgb.inputs["Color"])
-    links.new(separate_rgb.outputs["Red"], bsdf.inputs["Metallic"])
-    links.new(separate_rgb.outputs["Green"], bsdf.inputs["Roughness"])
-
-    if other_mix:
-         links.new(other_mix.outputs["Color"], mix.inputs[1])
-    else:
-        links_to_bsdf_base_color = bsdf.inputs["Base Color"].links
-        if links_to_bsdf_base_color:
-            link_to_bsdf_base_color = links_to_bsdf_base_color[0]
-            connected_node = link_to_bsdf_base_color.from_node
-            mix.blend_type = "MULTIPLY"
-            links.new(connected_node.outputs["Color"], mix.inputs[1])
-    links.new(separate_rgb.outputs["Blue"], mix.inputs[2])
-    links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
+def link_rdr_value_parameters(b: ShaderBuilder):
+    link_value_shader_parameters(b)
+    # Bumpiness already scales decoded XY in the RDR normal reconstruction.
+    for node in b.node_tree.nodes:
+        if node.bl_idname == "ShaderNodeNormalMap" and node.name.startswith("RDR Tangent Normal"):
+            for link in list(node.inputs["Strength"].links):
+                b.node_tree.links.remove(link)
+            node.inputs["Strength"].default_value = 1.0
 
 
 def link_diffuses(b: ShaderBuilder, tex1, tex2):
@@ -387,19 +361,8 @@ def RDR_create_2lyr_shader(b: ShaderBuilder):
     links.new(lyr1materialatex.outputs["Color"], mata_lyr_mix.inputs["Color2"])
     links.new(contrast.outputs["Color"], mata_lyr_mix.inputs["Fac"])
 
-    # Separate mixed _ma and link
-    materiala_rgb = node_tree.nodes.new(type='ShaderNodeSeparateColor')
-    links.new(mata_lyr_mix.outputs["Color"], materiala_rgb.inputs["Color"])
-    links.new(materiala_rgb.outputs["Red"], bsdf.inputs["Metallic"])
-    links.new(materiala_rgb.outputs["Green"], bsdf.inputs["Roughness"])
-
-    # Mix end result with ao
-    diff_ao_mix = node_tree.nodes.new("ShaderNodeMixRGB")
-    diff_ao_mix.inputs["Fac"].default_value = 0.95
-    diff_ao_mix.blend_type = "MULTIPLY"
-    links.new(lyr_dirt_mix.outputs["Color"], diff_ao_mix.inputs["Color1"])
-    links.new(materiala_rgb.outputs["Blue"], diff_ao_mix.inputs["Color2"])
-    links.new(diff_ao_mix.outputs["Color"], bsdf.inputs["Base Color"])
+    link_material_channels(b, mata_lyr_mix.outputs["Color"])
+    links.new(lyr_dirt_mix.outputs["Color"], bsdf.inputs["Base Color"])
 
     # Mix normal by vertex color and link
     normal_lyr_mix = node_tree.nodes.new("ShaderNodeMixRGB")
@@ -409,8 +372,7 @@ def RDR_create_2lyr_shader(b: ShaderBuilder):
     link_normal(b, normal_lyr_mix)
 
     # link value parameters
-    bsdf.inputs["Specular IOR Level"].default_value = 0
-    link_value_shader_parameters(b)
+    link_rdr_value_parameters(b)
 
 
 
@@ -520,9 +482,7 @@ def RDR_create_terrain_shader(b: ShaderBuilder):
         links.new(mixns[4].outputs[0], mixns[6].inputs[1])
         links.new(mixns[5].outputs[0], mixns[6].inputs[2])
 
-        nrm = node_tree.nodes.new("ShaderNodeNormalMap")
-        links.new(mixns[6].outputs[0], nrm.inputs[1])
-        links.new(nrm.outputs[0], bsdf.inputs["Normal"])
+        link_normal(b, mixns[6])
 
     # assign lookup sampler last so that it overwrites any socket connections
     if tm:
@@ -531,5 +491,202 @@ def RDR_create_terrain_shader(b: ShaderBuilder):
         links.new(tm.outputs[0], mixns[0].inputs[1])
 
     # link value parameters
-    bsdf.inputs["Specular IOR Level"].default_value = 0
-    link_value_shader_parameters(b)
+    bsdf.inputs["Roughness"].default_value = 1.0
+    link_rdr_value_parameters(b)
+
+
+PED_SMOOTHNESS_SHADERS = {
+    "ped", "ped_standard", "ped_standard_cloth", "ped_standard_hair",
+    "ped_standard_hair_lod", "ped_standard_fur", "ped_standard_skin",
+    "ped_standard_alpha", "ped_standard_cutout", "ped_standard_eye",
+    "ped_standard_eye_emissive", "ped_standard_eye_retroreflect",
+    "ped_standard_wrinkle", "ped_standard_eye_cap", "ped_standard_hair_alpha",
+    "ped_standard_hair_normal", "ped_standard_hat", "ped_standard_cloth_wrinkle",
+    "ped_standard_hair_cloth", "ped_slod_tint", "ped_skin", "ped_hair_cutout_alpha",
+    "ped_standard_skin_tattoo_bake", "ped_standard_skin_tint",
+    "ped_emissive_additive_alpha_flipbook", "horse_standard",
+}
+
+
+def math_node(b, operation, *values, name=None, clamp=False):
+    node = b.node_tree.nodes.new("ShaderNodeMath")
+    node.operation = operation
+    node.use_clamp = clamp
+    if name:
+        node.name = node.label = name
+    for socket, value in zip(node.inputs, values):
+        if isinstance(value, (float, int)):
+            socket.default_value = value
+        else:
+            b.node_tree.links.new(value, socket)
+    return node.outputs[0]
+
+
+def RDR_link_parameter_nodes(b):
+    """Custom parameter nodes are export data, not executable Blender shaders.
+
+    Bridge each linked component through a native Value node with a driver,
+    keeping imported values and UI edits live in Cycles.
+    """
+    nodes, links = b.node_tree.nodes, b.node_tree.links
+    for parameter in list(nodes):
+        if not isinstance(parameter, SzShaderNodeParameter):
+            continue
+        for index, output in enumerate(parameter.outputs):
+            destinations = [link.to_socket for link in output.links]
+            if not destinations:
+                continue
+            value = nodes.new("ShaderNodeValue")
+            value.name = value.label = f"RDR Preview {parameter.name} {index}"
+            value.outputs[0].default_value = output.default_value
+            driver = value.outputs[0].driver_add("default_value").driver
+            driver.type = "AVERAGE"
+            variable = driver.variables.new()
+            variable.name = "parameter"
+            variable.type = "SINGLE_PROP"
+            variable.targets[0].id_type = "NODETREE"
+            variable.targets[0].id = b.node_tree
+            variable.targets[0].data_path = f"{parameter.path_from_id()}.outputs[{index}].default_value"
+            for destination in destinations:
+                links.new(value.outputs[0], destination)
+
+
+def RDR_link_terrain_uvs(b):
+    if not b.shader.is_terrain:
+        return
+    nodes, links = b.node_tree.nodes, b.node_tree.links
+    uv_nodes = []
+    for index in range(3):
+        name = get_uv_map_name(index)
+        uv = nodes.get(name)
+        if uv is None:
+            uv = nodes.new("ShaderNodeUVMap")
+            uv.name = uv.label = uv.uv_map = name
+        uv_nodes.append(uv.outputs["UV"])
+    scale_bias = nodes.get("uvscalebias")
+    scaled = uv_nodes[0]
+    if scale_bias:
+        scale = nodes.new("ShaderNodeCombineXYZ")
+        bias = nodes.new("ShaderNodeCombineXYZ")
+        for component, source in (("X", "X"), ("Y", "Y")):
+            links.new(scale_bias.outputs[source], scale.inputs[component])
+        links.new(scale_bias.outputs["Z"], bias.inputs["X"])
+        links.new(scale_bias.outputs["W"], bias.inputs["Y"])
+        transform = nodes.new("ShaderNodeVectorMath")
+        transform.operation = "MULTIPLY_ADD"
+        transform.name = transform.label = "RDR Terrain UV Scale Bias"
+        links.new(scaled, transform.inputs[0])
+        links.new(scale.outputs[0], transform.inputs[1])
+        links.new(bias.outputs[0], transform.inputs[2])
+        scaled = transform.outputs[0]
+    uvset = nodes.get("uvset")
+    for layer, component in enumerate(("X", "Y", "Z", "W")):
+        vector = scaled
+        if uvset and uvset.outputs.get(component):
+            for index in (2, 3):
+                selector = nodes.new("ShaderNodeMixRGB")
+                is_set = math_node(b, "COMPARE", uvset.outputs[component], float(index), 0.01)
+                links.new(is_set, selector.inputs["Fac"])
+                links.new(vector, selector.inputs["Color1"])
+                links.new(uv_nodes[index - 1], selector.inputs["Color2"])
+                vector = selector.outputs[0]
+        for prefix in ("diffusetexture", "bumptexture", "materialmapatexture"):
+            texture = nodes.get(f"{prefix}_layer{layer}")
+            if texture:
+                links.new(vector, texture.inputs["Vector"])
+
+
+def link_material_channels(b, color):
+    split = b.node_tree.nodes.new("ShaderNodeSeparateColor")
+    split.name = split.label = "RDR Material Channels"
+    b.node_tree.links.new(color, split.inputs["Color"])
+    if b.shader.base_name.startswith("terrain_lod"):
+        roughness = math_node(b, "SUBTRACT", 1.0, split.outputs["Green"],
+                              name="RDR Terrain LOD Roughness", clamp=True)
+        b.bsdf.inputs["Metallic"].default_value = 0.0
+    elif b.shader.base_name == "terrain_slod":
+        roughness = split.outputs["Red"]
+        b.bsdf.inputs["Metallic"].default_value = 0.0
+    elif b.shader.base_name in PED_SMOOTHNESS_SHADERS:
+        smoothness = math_node(b, "MULTIPLY", split.outputs["Red"], 0.5,
+                               name="RDR Ped Smoothness", clamp=True)
+        roughness = math_node(b, "SUBTRACT", 1.0, smoothness,
+                              name="RDR Ped Roughness", clamp=True)
+        b.bsdf.inputs["Metallic"].default_value = 0.0
+    else:
+        b.node_tree.links.new(split.outputs["Red"], b.bsdf.inputs["Metallic"])
+        roughness = split.outputs["Green"]
+    b.node_tree.links.new(roughness, b.bsdf.inputs["Roughness"])
+
+
+def link_normal(b, texture, strength=None, uv_index=0):
+    """ RDR normals store XY, not XYZ. Convert DirectX Y to Blender's convention
+    after reconstructing Z, so unused blue/alpha cannot distort the normal.
+    """
+    nodes, links = b.node_tree.nodes, b.node_tree.links
+    if b.shader.base_name.startswith("terrain_lod") or b.shader.base_name == "terrain_slod":
+        decode = nodes.new("ShaderNodeVectorMath")
+        decode.operation = "MULTIPLY_ADD"
+        decode.inputs[1].default_value = (2.0, 2.0, 2.0)
+        decode.inputs[2].default_value = (-1.0, -1.0, -1.0)
+        links.new(texture.outputs["Color"], decode.inputs[0])
+        links.new(decode.outputs[0], b.bsdf.inputs["Normal"])
+        return
+    split = nodes.new("ShaderNodeSeparateColor")
+    links.new(texture.outputs["Color"], split.inputs["Color"])
+    x = math_node(b, "MULTIPLY_ADD", split.outputs["Red"], 2.0, -1.0)
+    y = math_node(b, "MULTIPLY_ADD", split.outputs["Green"], 2.0, -1.0)
+    length2 = math_node(b, "ADD", math_node(b, "MULTIPLY", x, x),
+                        math_node(b, "MULTIPLY", y, y))
+    z = math_node(b, "SQRT", math_node(b, "ABSOLUTE",
+                  math_node(b, "SUBTRACT", 1.0, length2)))
+    if strength is None:
+        bump = nodes.get("bumpiness")
+        strength = bump.outputs["X"] if bump else 1.0
+    vector = nodes.new("ShaderNodeCombineXYZ")
+    links.new(math_node(b, "MULTIPLY", x, strength), vector.inputs["X"])
+    links.new(math_node(b, "MULTIPLY", math_node(b, "MULTIPLY", y, -1.0), strength), vector.inputs["Y"])
+    links.new(z, vector.inputs["Z"])
+    normalize = nodes.new("ShaderNodeVectorMath")
+    normalize.operation = "NORMALIZE"
+    links.new(vector.outputs[0], normalize.inputs[0])
+    encode = nodes.new("ShaderNodeVectorMath")
+    encode.operation = "MULTIPLY_ADD"
+    encode.name = encode.label = "RDR Reconstructed Normal"
+    encode.inputs[1].default_value = (0.5, 0.5, 0.5)
+    encode.inputs[2].default_value = (0.5, 0.5, 0.5)
+    links.new(normalize.outputs[0], encode.inputs[0])
+    normal = nodes.new("ShaderNodeNormalMap")
+    normal.name = normal.label = "RDR Tangent Normal"
+    normal.uv_map = get_uv_map_name(uv_index)
+    links.new(encode.outputs[0], normal.inputs["Color"])
+    links.new(normal.outputs["Normal"], b.bsdf.inputs["Normal"])
+
+
+def link_emission(b, texture):
+    if "emissive" not in b.shader.base_name or texture is None:
+        return
+    param = b.node_tree.nodes.get("intensity") or b.node_tree.nodes.get("emissivemultiplier")
+    if param is None:
+        return
+    links = b.node_tree.links
+    links.new(texture.outputs["Color"], b.bsdf.inputs["Emission Color"])
+    strength = math_node(b, "MULTIPLY", param.outputs["X"], 0.025,
+                         name="RDR Emission Strength", clamp=True)
+    links.new(strength, b.bsdf.inputs["Emission Strength"])
+
+
+def link_alpha(b, texture):
+    """Keep packed diffuse alpha out of opaque materials."""
+    if texture is None or not (b.shader.is_alpha or b.shader.is_decal or b.shader.is_cutout):
+        b.bsdf.inputs["Alpha"].default_value = 1.0
+        return
+    alpha = texture.outputs["Alpha"]
+    scale = b.node_tree.nodes.get("alphascale")
+    if scale:
+        alpha = math_node(b, "MULTIPLY", alpha, scale.outputs["X"], clamp=True)
+    if b.shader.is_cutout:
+        # Blender's default clip reference; native shader-specific alpha tests
+        # (including stochastic foliage) require additional shader evidence.
+        alpha = math_node(b, "GREATER_THAN", alpha, 0.5, name="RDR Alpha Cutout")
+    b.node_tree.links.new(alpha, b.bsdf.inputs["Alpha"])

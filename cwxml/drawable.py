@@ -175,7 +175,18 @@ class TextureShaderParameter(ShaderParameter):
         elif current_game() == SollumzGame.RDR:
             self.texture_name = AttributeProperty("texture", "")
             self.index = AttributeProperty("index", 0)
-            self.flags = AttributeProperty("flags", 0)
+            # default external texture flags when XML omits flags.
+            self.flags = AttributeProperty("flags", 0x10000000)
+
+    def to_xml(self):
+        element = super().to_xml()
+        if current_game() == SollumzGame.RDR:
+            if not self.texture_name:
+                element.attrib.pop("texture", None)
+                element.attrib.pop("flags", None)
+            elif self.flags == 0x10000000:
+                element.attrib.pop("flags", None)
+        return element
 
     def __hash__(self) -> int:
         return hash((self.name, self.type, self.texture_name))
@@ -232,6 +243,7 @@ class CBufferShaderParameter(ShaderParameter):
 
     def __init__(self):
         super().__init__()
+        self.is_array = False
 
     @staticmethod
     def from_xml(element: ET.Element):
@@ -242,23 +254,27 @@ class CBufferShaderParameter(ShaderParameter):
             if item not in ("name", "type", "value_type"):
                 val = float(element.attrib[item])
             setattr(new, item, val)
+        array = element.find("Array")
+        new.is_array = array is not None
+        if new.is_array:
+            new.values = [Vector4Property.from_xml(item).value for item in array]
         return new
 
     def to_xml(self):
         element = super().to_xml()
         element.set("buffer", str(int(self.buffer)))
         element.set("offset", str(int(self.offset)))
-        element.set("length", str(self.length))
+        element.set("length", str(int(self.length)))
         
         if hasattr(self, "is_array") and not self.is_array:
             if hasattr(self, "x") and self.x is not None:
-                element.set("x", str(round(self.x, 5)))
+                element.set("x", str(self.x))
             if hasattr(self, "y") and self.y is not None:
-                element.set("y", str(round(self.y, 5)))
+                element.set("y", str(self.y))
             if hasattr(self, "z") and self.z is not None:
-                element.set("z", str(round(self.z, 5)))
+                element.set("z", str(self.z))
             if hasattr(self, "w") and self.w is not None:
-                element.set("w", str(round(self.w, 5)))
+                element.set("w", str(self.w))
         else:
             array_parent = ET.Element("Array")
             for value in self.values:
@@ -401,7 +417,14 @@ class Shader(ElementTree):
         elif current_game() == SollumzGame.RDR:
             self.draw_bucket = ValueProperty("DrawBucket", 0)
             self.draw_bucket_flag = ValueProperty("DrawBucketFlag", False)
+            self.unknown_3e = ValueProperty("Unknown_3E", 0)
             self.parameters = RDRParameters()
+
+    def to_xml(self):
+        element = super().to_xml()
+        if current_game() == SollumzGame.RDR and not self.unknown_3e:
+            element.remove(element.find("Unknown_3E"))
+        return element
 
     def __hash__(self) -> int:
         params_elem = self.get_element("parameters")

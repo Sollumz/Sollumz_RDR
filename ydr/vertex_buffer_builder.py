@@ -247,6 +247,29 @@ class VertexBufferBuilder:
         mesh_attrs["Tangent"] = self._get_tangents()
 
         if current_game() == SollumzGame.RDR:
+            for name in ("Normal", "Tangent", "Binormal"):
+                attr = self.mesh.attributes.get("RDRNative" + name)
+                if attr is None:
+                    continue
+                values = np.zeros((len(self.mesh.vertices), 4), dtype=np.float32)
+                xyz = np.empty((len(self.mesh.vertices), 3), dtype=np.float32)
+                attr.data.foreach_get("vector", xyz.ravel())
+                values[:, :3] = xyz
+                w = self.mesh.attributes.get("RDRNative" + name + "W")
+                if w is not None:
+                    component = np.empty(len(self.mesh.vertices), dtype=np.float32)
+                    w.data.foreach_get("value", component)
+                    values[:, 3] = component
+                mesh_attrs[name] = values[self._loop_to_vert_inds] if self.domain == VBBuilderDomain.FACE_CORNER else values
+            if "Binormal" not in mesh_attrs:
+                from ..cwxml.shader import ShaderManager
+                definitions = [ShaderManager.find_shader(m.shader_properties.filename, SollumzGame.RDR)
+                               for m in (self.materials or self.mesh.materials) if m is not None]
+                if any(d is not None and any("Y" in s for s in d.semantics.values) for d in definitions):
+                    values = np.zeros_like(mesh_attrs["Tangent"])
+                    sign = np.where(mesh_attrs["Tangent"][:, 3:4] < 0, -1, 1)
+                    values[:, :3] = np.cross(mesh_attrs["Normal"][:, :3], mesh_attrs["Tangent"][:, :3]) * sign
+                    mesh_attrs["Binormal"] = values
             mesh_attrs["Tangent1"] = mesh_attrs["Tangent"].copy()
             mesh_attrs["Tangent2"] = Vector((1, 0, 0, 0))
 

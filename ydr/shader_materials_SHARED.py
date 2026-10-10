@@ -522,11 +522,11 @@ def create_parameter_node(
         if cols > 3:
             node.set("W", param.w)
 
-        if param.type == ShaderParameterType.CBUFFER:
-            node.extra_property.buffer = param.buffer
-            node.extra_property.offset = param.offset
-        elif param.type == ShaderParameterType.SAMPLER:
-            node.extra_property.index = param.index
+    if param.type == ShaderParameterType.CBUFFER:
+        node.extra_property.buffer = param.buffer
+        node.extra_property.offset = param.offset
+    elif param.type == ShaderParameterType.SAMPLER:
+        node.extra_property.index = param.index
 
     return node
 

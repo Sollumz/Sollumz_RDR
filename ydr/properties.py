@@ -157,6 +157,25 @@ class SkinnedDrawableModelProperties(bpy.types.PropertyGroup):
             return self.very_low
 
 
+class ShaderParameterValue(bpy.types.PropertyGroup):
+    value: bpy.props.FloatVectorProperty(size=4)
+
+
+class ShaderParameterProperties(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty()
+    type: bpy.props.StringProperty()
+    index: bpy.props.IntProperty(default=0)
+    buffer: bpy.props.IntProperty(default=0)
+    offset: bpy.props.IntProperty(default=0)
+    length: bpy.props.IntProperty(default=0)
+    texture_name: bpy.props.StringProperty()
+    # Texture flags are uint32; Blender's IntProperty is signed.
+    texture_flags: bpy.props.StringProperty(default="268435456")
+    is_array: bpy.props.BoolProperty(default=False)
+    num_components: bpy.props.IntProperty(default=0, min=0, max=4)
+    values: bpy.props.CollectionProperty(type=ShaderParameterValue)
+
+
 class ShaderProperties(bpy.types.PropertyGroup):
     index: bpy.props.IntProperty(min=0)
 
@@ -166,6 +185,11 @@ class ShaderProperties(bpy.types.PropertyGroup):
     )
     filename: bpy.props.StringProperty(name="Shader Filename", default="default.sps")
     name: bpy.props.StringProperty(name="Shader Name", default="default")
+    parameter_layout: bpy.props.CollectionProperty(type=ShaderParameterProperties)
+    parameter_layout_filename: bpy.props.StringProperty()
+    buffer_sizes: bpy.props.StringProperty()
+    draw_bucket_flag: bpy.props.BoolProperty(default=False)
+    unknown_3e: bpy.props.IntProperty(default=0, min=0, max=65535)
 
     def get_ui_name(self) -> str:
         game = self.id_data.sollum_game_type

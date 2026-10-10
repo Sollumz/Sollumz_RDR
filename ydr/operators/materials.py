@@ -75,6 +75,7 @@ def shader_preset_from_material(material: Material) -> ShaderPreset:
 
 def shader_preset_apply_to_material(material: Material, preset: ShaderPreset, apply_textures: bool = True):
     shader_def = ShaderManager.find_shader(material.shader_properties.filename, material.sollum_game_type)
+    from ..ydrimport import lookup_texture_file, is_non_color_texture
 
     for param in preset.params:
         param_def = shader_def.parameter_map.get(param.name, None)
@@ -106,14 +107,17 @@ def shader_preset_apply_to_material(material: Material, preset: ShaderPreset, ap
             img = bpy.data.images.get(param.texture, None) or bpy.data.images.get(f"{param.texture}.dds", None)
             if not img:
                 # Otherwise, search in the shared textures directories
-                from ..ydrimport import lookup_texture_file, is_non_color_texture
                 texture_path = lookup_texture_file(param.texture, None)
                 img = texture_path and bpy.data.images.load(str(texture_path), check_existing=True)
-                if img and is_non_color_texture(shader_def.filename, param.name):
+                if img and is_non_color_texture(shader_def.filename, param.name, material.sollum_game_type):
                     img.colorspace_settings.is_data = True
 
             if img:
                 node.image = img
+                if material.sollum_game_type == SollumzGame.RDR:
+                    if is_non_color_texture(shader_def.filename, param.name, material.sollum_game_type):
+                        img.colorspace_settings.is_data = True
+                        img.alpha_mode = "CHANNEL_PACKED"
 
 
 class SOLLUMZ_OT_save_shader_preset(SOLLUMZ_OT_base, bpy.types.Operator):

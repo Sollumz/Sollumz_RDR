@@ -65,6 +65,18 @@ class MeshBuilder:
         if self._has_colors:
             self.set_mesh_vertex_colors(mesh)
 
+        if game == SollumzGame.RDR and "Binormal" in self.vertex_arr.dtype.names:
+            # debris shaders use a native basis, not UV-derived tangents.
+            for name in ("Normal", "Tangent", "Binormal"):
+                if name not in self.vertex_arr.dtype.names:
+                    continue
+                values = self.vertex_arr[name]
+                attr = mesh.attributes.new("RDRNative" + name, "FLOAT_VECTOR", "POINT")
+                attr.data.foreach_set("vector", values[:, :3].flatten())
+                if values.shape[1] == 4:
+                    w = mesh.attributes.new("RDRNative" + name + "W", "FLOAT", "POINT")
+                    w.data.foreach_set("value", values[:, 3])
+
         mesh.validate()
 
         return mesh

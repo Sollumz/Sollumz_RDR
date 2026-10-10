@@ -284,7 +284,14 @@ def lookup_texture_file(texture_name: str, model_textures_directory: Optional[Pa
     return None
 
 
-def is_non_color_texture(shader_filename: str, param_name: str):
+def is_non_color_texture(shader_filename: str, param_name: str, game=SollumzGame.GTA):
+    if game == SollumzGame.RDR:
+        name = param_name.lower()
+        return (any(token in name for token in ("bump", "normal", "specular", "materiala", "materialb", "materialmapa"))
+                or name in {"controltexturetex", "controltexturetexa", "controltexturetexb",
+                            "controltexturetexc", "aotexturetex", "lookuptexture",
+                            "heighttexture", "wrinklemasktexture", "wrinkletexture",
+                            "distancemapsampler", "detailtexarrayn", "detailtexture"})
     # TODO: we could specify non-color textures in shaders.xml
     # assign non-color...
     return (
@@ -322,6 +329,55 @@ def shader_item_to_material(shader: Shader, shader_group: ShaderGroup, filepath:
     parameters = shader.parameters
     if current_game() == SollumzGame.RDR:
         parameters = parameters.items
+        properties = material.shader_properties
+        properties.parameter_layout_filename = filename
+        properties.buffer_sizes = shader.parameters.buffer_size
+        properties.draw_bucket_flag = shader.draw_bucket_flag
+        properties.unknown_3e = shader.unknown_3e
+        for param in parameters:
+            layout = properties.parameter_layout.add()
+            layout.name = param.name
+            layout.type = param.type
+            if param.type == "Texture":
+                layout.index = param.index
+                layout.texture_name = param.texture_name
+                layout.texture_flags = str(param.flags)
+            elif param.type in {"Sampler", "Unknown"}:
+                layout.index = param.index
+                if param.type == "Sampler":
+                    layout.values.add().value = (param.x, 0, 0, 0)
+            else:
+                layout.is_array = param.type == "Array" or (param.type == "CBuffer" and param.is_array)
+                if param.type == "CBuffer":
+                    layout.buffer = int(param.buffer)
+                    layout.offset = int(param.offset)
+                    layout.length = int(param.length)
+                if layout.is_array:
+                    layout.num_components = 4
+                    for value in param.values:
+                        layout.values.add().value = value
+                else:
+                    components = [getattr(param, c) for c in "xyzw"]
+                    layout.num_components = sum(c is not None for c in components)
+                    layout.values.add().value = tuple(c if c is not None else 0.0 for c in components)
+
+            if param.type in {"CBuffer", "Vector", "Array"}:
+                node = next((n for n in material.node_tree.nodes if isinstance(n, SzShaderNodeParameter)
+                             and jenkhash.GenerateCaseSensitive(n.name) == jenkhash.GenerateCaseSensitive(param.name)), None)
+                if node is None:
+                    node = material.node_tree.nodes.new(SzShaderNodeParameter.bl_idname)
+                    node.name = node.label = param.name
+                cols = max(1, layout.num_components)
+                rows = max(1, len(layout.values)) if layout.is_array else 1
+                if (node.num_cols, node.num_rows) != (cols, rows):
+                    node.outputs.clear()
+                    node.set_size(cols, rows)
+                for row, value in enumerate(layout.values):
+                    for col in range(cols):
+                        node.set(row * cols + col, value.value[col])
+                if param.type == "CBuffer":
+                    node.extra_property.buffer = layout.buffer
+                    node.extra_property.offset = layout.offset
 
     for param in parameters:
         for n in material.node_tree.nodes:
@@ -348,10 +404,12 @@ def shader_item_to_material(shader: Shader, shader_group: ShaderGroup, filepath:
                             name=param.texture_name, width=512, height=512) if not existing_texture else existing_texture
                         n.image = texture
 
-                    if is_non_color_texture(filename, param.name):
+                    if is_non_color_texture(filename, param.name, current_game()):
                         n.image.colorspace_settings.is_data = True
+                        if current_game() == SollumzGame.RDR:
+                            n.image.alpha_mode = "CHANNEL_PACKED"
 
-                    # rdr check if we should set tint mix to 0.95
+                    # Enable palette tint only when a palette image was assigned.
                     if param.name == "tintpalettetex" and n.image is not None:
                         hasTint = True
 
@@ -420,7 +478,7 @@ def shader_item_to_material(shader: Shader, shader_group: ShaderGroup, filepath:
         dtl_ext.image = dtl.image
 
     if current_game() == SollumzGame.RDR:
-        tint_value = 0.95 if hasTint else 0.0
+        tint_value = 1.0 if hasTint else 0.0
         tint_value_2lyr = 1.0 if hasTint else 0.0
         for n in material.node_tree.nodes:
             if n.name  == "tint_mix_node":

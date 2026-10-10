@@ -13,7 +13,8 @@ from ..shared.shader_expr import expr, compile_expr
 from .render_bucket import RenderBucket
 
 from .shader_materials_SHARED import *
-from .shader_materials_RDR import RDR_create_basic_shader_nodes, RDR_create_2lyr_shader, RDR_create_terrain_shader
+from .shader_materials_RDR import (RDR_create_basic_shader_nodes, RDR_create_2lyr_shader, RDR_create_terrain_shader,
+                                   RDR_link_parameter_nodes, RDR_link_terrain_uvs)
 
 
 class ShaderMaterial(NamedTuple):
@@ -559,6 +560,10 @@ def create_shader(filename: str, game: SollumzGame = SollumzGame.GTA, in_place_m
     if in_place_material and (in_place_material.use_nodes if bpy.app.version < (5, 0, 0) else True):
         # If creating the shader in an existing material, setup the node tree to its default state
         current_node_tree = in_place_material.node_tree
+        if game == SollumzGame.RDR and current_node_tree.animation_data:
+            for curve in list(current_node_tree.animation_data.drivers):
+                if curve.data_path.startswith('nodes["RDR Preview '):
+                    current_node_tree.animation_data.drivers.remove(curve)
         current_node_tree.nodes.clear()
         material_ouput = current_node_tree.nodes.new("ShaderNodeOutputMaterial")
         bsdf = current_node_tree.nodes.new("ShaderNodeBsdfPrincipled")
@@ -581,6 +586,8 @@ def create_shader(filename: str, game: SollumzGame = SollumzGame.GTA, in_place_m
         mat.use_nodes = True
     mat.shader_properties.name = base_name
     mat.shader_properties.filename = filename
+    mat.shader_properties.parameter_layout.clear()
+    mat.shader_properties.parameter_layout_filename = ""
     if game == SollumzGame.GTA:
         mat.shader_properties.renderbucket = RenderBucket(shader.render_bucket).name
     elif game == SollumzGame.RDR:
@@ -632,6 +639,10 @@ def create_shader(filename: str, game: SollumzGame = SollumzGame.GTA, in_place_m
             add_vehicle_dirt_nodes(builder)
 
     link_uv_map_nodes_to_textures(builder)
+
+    if game == SollumzGame.RDR:
+        RDR_link_terrain_uvs(builder)
+        RDR_link_parameter_nodes(builder)
 
     organize_node_tree(builder)
 
