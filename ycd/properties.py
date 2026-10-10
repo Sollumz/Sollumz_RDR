@@ -354,6 +354,17 @@ class AnimationTracks(bpy.types.PropertyGroup):
     unk_139: FloatProp("Unk 139")
     unk_140: FloatProp("Unk 140")
 
+    # Typed auxiliary channels, deliberately separate from the GTA properties.
+    # Their game-side procedural consumers are not Blender bone transforms.
+    rdr_49: Vec3Prop("RDR Track 49", subtype="XYZ")
+    rdr_58: Vec3Prop("RDR Track 58", subtype="XYZ")
+    rdr_59: QuatProp("RDR Track 59")
+    rdr_68: FloatProp("RDR Track 68")
+    rdr_69: Vec3Prop("RDR Track 69", subtype="XYZ")
+    rdr_138: QuatProp("RDR Track 138")
+    rdr_178: QuatProp("RDR Track 178")
+    rdr_179: Vec3Prop("RDR Track 179", subtype="XYZ")
+
     def update_uv_transform_matrix(self):
         mat = calculate_final_uv_transform_matrix(self.uv_transforms)
         self.uv0[0] = mat[0][0]

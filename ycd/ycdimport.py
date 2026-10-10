@@ -8,6 +8,7 @@ from ..tools.animationhelper import (
     Track,
     TrackFormat,
     TrackFormatMap,
+    rdr_track_from_xml,
     get_canonical_track_data_path,
     get_action_duration_frames,
     get_scene_fps
@@ -128,10 +129,12 @@ def combine_sequences_and_build_action_data(animation: ycdxml.Animation) -> Acti
 
     action_data = {}
     supported_tracks = set(range(len(animation.bone_ids)))
+    tracks = [bone_data.track for bone_data in animation.bone_ids]
     if isinstance(animation, ycdxml.RDRAnimation):
         unsupported = set()
         for index, bone_data in enumerate(animation.bone_ids):
-            expected_format = TrackFormatMap.get(bone_data.track)
+            tracks[index] = rdr_track_from_xml(bone_data.track, bone_data.format)
+            expected_format = TrackFormatMap.get(tracks[index])
             if expected_format != bone_data.format:
                 supported_tracks.discard(index)
                 unsupported.add((bone_data.track, bone_data.format))
@@ -159,7 +162,7 @@ def combine_sequences_and_build_action_data(animation: ycdxml.Animation) -> Acti
             if bone_data is None:
                 continue
 
-            track = bone_data.track
+            track = tracks[sequence_data_index]
             format = bone_data.format
             assert TrackFormatMap[track] == format, f"Track format mismatch: {TrackFormatMap[track]} != {format}"
 

@@ -18,6 +18,8 @@ from ..tools.animationhelper import (
     Track,
     TrackFormat,
     TrackFormatMap,
+    RDRTrackToXmlMap,
+    rdr_track_to_xml,
     AnimationFlag,
     get_quantum_and_min_val,
     get_id_and_track_from_track_data_path,
@@ -127,6 +129,7 @@ def sequence_items_from_armature(
     frame_start: float,
     frame_end: float,
     sample_step: float = 1.0,
+    allow_empty: bool = False,
 ) -> SequenceItems:
     """Bake the assigned skeleton into native Sollumz bone/track sequence items."""
     if armature is None or armature.type != "ARMATURE":
@@ -224,7 +227,7 @@ def sequence_items_from_armature(
                 break
     tracks = {key: values for key, values in tracks.items()
               if key[1] in (Track.MoverPosition, Track.MoverRotation) or key[0] in exported_bones}
-    if not tracks:
+    if not tracks and not allow_empty:
         raise ValueError("Animation has no keyed bones, evaluated bone motion or object root motion.")
 
     # Maintain quaternion hemisphere continuity before compression or interpolation.
@@ -242,6 +245,54 @@ def sequence_items_from_armature(
     return sequence_items
 
 
+def rdr_auxiliary_sequence_items(action, target_id, target, frame_count):
+    """Sample editable auxiliary F-curves without treating them as pose TRS.
+
+    Canonical #tag paths also retain channels whose tag has no physical bone.
+    Quaternion RNA/F-curves are WXYZ; the existing RDR encoder writes XYZW.
+    """
+    bone_name_map = build_name_bone_map(target)
+    grouped = {}
+    for curve in action_fcurves(action):
+        pair = get_id_and_track_from_track_data_path(curve.data_path, target_id, bone_name_map)
+        if pair is None or pair[1] not in RDRTrackToXmlMap:
+            continue
+        if not curve.keyframe_points and not curve.sampled_points:
+            continue
+        components = grouped.setdefault(pair, {})
+        if curve.array_index in components:
+            raise ValueError(f"Duplicate RDR auxiliary component: {pair}, {curve.array_index}.")
+        components[curve.array_index] = curve
+    result = {}
+    start, end = action.frame_range
+    sample_times = [start + index * (end - start) / (frame_count - 1) for index in range(frame_count)]
+    for (tag, track), curves in grouped.items():
+        fmt = TrackFormatMap[track]
+        count = {TrackFormat.Vector3: 3, TrackFormat.Quaternion: 4, TrackFormat.Float: 1}[fmt]
+        if set(curves) != set(range(count)):
+            raise ValueError(f"RDR track {rdr_track_to_xml(track)}, tag {tag}: requires {count} components.")
+        # Imported keys store frame times as float32. Recomputing the uniform
+        # grid in double precision can sample just beside a sharp key change.
+        # Snap only complete matching grids; evaluate() still applies modifiers.
+        times = {}
+        for axis, curve in curves.items():
+            keys = curve.keyframe_points
+            aligned = len(keys) == frame_count and all(
+                abs(key.co.x - frame) <= max(1e-6, abs(frame) * 1e-7)
+                for key, frame in zip(keys, sample_times))
+            times[axis] = [key.co.x for key in keys] if aligned else sample_times
+        values = []
+        for index in range(frame_count):
+            components = [curves[axis].evaluate(times[axis][index]) for axis in range(count)]
+            if not all(math.isfinite(value) for value in components):
+                raise ValueError(f"RDR track {rdr_track_to_xml(track)}, tag {tag}: non-finite sample.")
+            value = (Vector(components) if fmt == TrackFormat.Vector3 else
+                     Quaternion(components) if fmt == TrackFormat.Quaternion else components[0])
+            values.append(value)
+        result.setdefault(tag, {})[track] = values
+    return result
+
+
 def sequence_items_from_action(
         action: bpy.types.Action,
         target_id: bpy.types.ID
@@ -255,8 +306,13 @@ def sequence_items_from_action(
         if export_frame_count < 2:
             raise ValueError("Animation needs at least two keyed frames.")
         sample_step = (action_frame_range[1] - action_frame_range[0]) / (export_frame_count - 1)
+        auxiliary = rdr_auxiliary_sequence_items(action, target_id, target, export_frame_count)
         with animation_export_context(bpy.context, target, action):
-            return sequence_items_from_armature(bpy.context, target, *action_frame_range, sample_step=sample_step)
+            items = sequence_items_from_armature(bpy.context, target, *action_frame_range,
+                                                sample_step=sample_step, allow_empty=bool(auxiliary))
+        for tag, tracks in auxiliary.items():
+            items.setdefault(tag, {}).update(tracks)
+        return items
 
     def _export_frame_to_action_frame(frame_index: int) -> float:
         export_last_frame_index = export_frame_count - 1
@@ -283,6 +339,9 @@ def sequence_items_from_action(
             continue
 
         bone_id, track = bone_id_track_pair
+        if track in RDRTrackToXmlMap:
+            logger.warning(f"RDR auxiliary channel '{data_path}' cannot be exported as GTA, skipping...")
+            continue
         if track == Track.UVTransforms:
             if bone_id not in uv_transforms_fcurves:
                 uv_transforms_fcurves[bone_id] = []
@@ -589,14 +648,14 @@ def animation_from_object(animation_obj: bpy.types.Object) -> Optional[ycdxml.An
     sequence_datas = [(bone_id, track, frames_data)
                       for bone_id, bones_data in sequence_items.items()
                       for track, frames_data in bones_data.items()]
-    sequence_datas.sort(key=lambda x: x[0] | (x[1].value << 16))
+    sequence_datas.sort(key=lambda x: x[0] | ((rdr_track_to_xml(x[1]) if is_rdr else x[1].value) << 16))
     for bone_id, track, frames_data in sequence_datas:
         if track == Track.MoverPosition or track == Track.MoverRotation:
             animation.unknown10 |= AnimationFlag.RootMotion
 
         seq_bone_id = animation_type.BoneIdList.BoneId()
         seq_bone_id.bone_id = bone_id
-        seq_bone_id.track = track.value
+        seq_bone_id.track = rdr_track_to_xml(track) if is_rdr else track.value
         seq_bone_id.format = TrackFormatMap[track].value
         animation.bone_ids.append(seq_bone_id)
 

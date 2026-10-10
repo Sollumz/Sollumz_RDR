@@ -67,6 +67,17 @@ class Track(IntEnum):
     Unk139 = 139
     Unk140 = 140
 
+    # Internal keys, NOT wire IDs. RDR reuses GTA IDs with different formats.
+    # Keep the two namespaces separate; rdr_track_to_xml restores the byte ID.
+    RDRUnk49 = 2049
+    RDRUnk58 = 2058
+    RDRUnk59 = 2059
+    RDRUnk68 = 2068
+    RDRUnk69 = 2069
+    RDRUnk138 = 2138
+    RDRUnk178 = 2178
+    RDRUnk179 = 2179
+
     # not a real track, refers to the uv_transforms collection
     UVTransforms = 1000
 
@@ -121,7 +132,27 @@ TrackFormatMap = {
     Track.Unk138: TrackFormat.Float,
     Track.Unk139: TrackFormat.Float,
     Track.Unk140: TrackFormat.Float,
+    Track.RDRUnk49: TrackFormat.Vector3,
+    Track.RDRUnk58: TrackFormat.Vector3,
+    Track.RDRUnk59: TrackFormat.Quaternion,
+    Track.RDRUnk68: TrackFormat.Float,
+    Track.RDRUnk69: TrackFormat.Vector3,
+    Track.RDRUnk138: TrackFormat.Quaternion,
+    Track.RDRUnk178: TrackFormat.Quaternion,
+    Track.RDRUnk179: TrackFormat.Vector3,
 }
+
+RDRTrackToXmlMap = {track: int(track) - 2000 for track in TrackFormatMap if int(track) >= 2000}
+RDRXmlToTrackMap = {(wire_id, int(TrackFormatMap[track])): track
+                    for track, wire_id in RDRTrackToXmlMap.items()}
+
+
+def rdr_track_from_xml(track_id: int, type_id: int):
+    return RDRXmlToTrackMap.get((track_id, type_id), track_id)
+
+
+def rdr_track_to_xml(track: Track) -> int:
+    return RDRTrackToXmlMap.get(track, int(track))
 
 
 # Mapping of Track to Blender property names. See ycd.properties.AnimationTracks.
@@ -166,6 +197,14 @@ TrackToPropertyNameMap = {
     Track.Unk138: "unk_138",
     Track.Unk139: "unk_139",
     Track.Unk140: "unk_140",
+    Track.RDRUnk49: "rdr_49",
+    Track.RDRUnk58: "rdr_58",
+    Track.RDRUnk59: "rdr_59",
+    Track.RDRUnk68: "rdr_68",
+    Track.RDRUnk69: "rdr_69",
+    Track.RDRUnk138: "rdr_138",
+    Track.RDRUnk178: "rdr_178",
+    Track.RDRUnk179: "rdr_179",
 }
 
 PropertyNameToTrackMap = {v: k for k, v in TrackToPropertyNameMap.items()}
