@@ -3,7 +3,7 @@ import json
 import bpy
 from mathutils import Vector, Quaternion
 from ..cwxml import clipdictionary as ycdxml
-from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, SollumzGame
+from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, SollumzGame, set_import_export_current_game
 from ..tools.animationhelper import (
     Track,
     TrackFormat,
@@ -14,6 +14,7 @@ from ..tools.animationhelper import (
     get_scene_fps
 )
 from ..tools.utils import color_hash
+from ..tools import jenkhash
 from .. import logger
 
 
@@ -276,6 +277,8 @@ def animation_to_obj(animation: ycdxml.Animation) -> bpy.types.Object:
 
     animation_obj.name = animation.hash
     animation_obj.animation_properties.hash = animation.hash
+    if isinstance(animation, ycdxml.RDRAnimation):
+        animation_obj.animation_properties.rdr_dict_index = animation.dict_index
 
     action_data = combine_sequences_and_build_action_data(animation)
     animation_obj.animation_properties.action = action_data_to_action(animation.hash, action_data,
@@ -296,22 +299,36 @@ def clip_to_obj(
     clip_obj.clip_properties.name = clip.name
     clip_obj.clip_properties.animations.clear()
 
+    def add_rdr_link(animation):
+        link = clip_obj.clip_properties.animations.add()
+        link.rdr_animation_hash = animation.animation_hash
+        link.rdr_start_time = animation.start_time
+        link.rdr_end_time = animation.end_time
+        link.rdr_speed = animation.rate
+        animation_data = animations_map.get(animation.animation_hash)
+        animation_obj = animations_obj_map.get(animation.animation_hash)
+        if animation_obj is None:
+            link.rdr_pending = True
+        else:
+            link.animation = animation_obj
+            duration_frames = get_action_duration_frames(animation_obj.animation_properties.action)
+            link.start_frame = animation.start_time / animation_data.duration * duration_frames
+            link.end_frame = animation.end_time / animation_data.duration * duration_frames
+        return link
+
     if isinstance(clip, ycdxml.RDRMultiClip):
         clip_obj.clip_properties.rdr_multi = True
         clip_obj.clip_properties.duration = clip.duration
         for part_index, part in enumerate(clip.parts):
             for animation in part.clips:
-                animation_data = animations_map[animation.animation_hash]
-                animation_obj = animations_obj_map[animation.animation_hash]
-                duration_frames = get_action_duration_frames(animation_obj.animation_properties.action)
-                link = clip_obj.clip_properties.animations.add()
-                link.animation = animation_obj
-                link.start_frame = animation.start_time / animation_data.duration * duration_frames
-                link.end_frame = animation.end_time / animation_data.duration * duration_frames
+                link = add_rdr_link(animation)
                 link.rdr_part_index = part_index
                 link.rdr_part_duration = part.duration
                 link.rdr_speed = animation.rate
                 link.rdr_unknown_10 = json.dumps([list(value.value) for value in animation.unknown_10])
+    elif isinstance(clip, ycdxml.RDRClip):
+        clip_obj.clip_properties.duration = (clip.end_time - clip.start_time) / clip.rate
+        add_rdr_link(clip)
     elif clip.type == ycdxml.ClipType.ANIMATION:
         animation_data = animations_map[clip.animation_hash]
         animation_obj = animations_obj_map[clip.animation_hash]
@@ -412,19 +429,99 @@ def clip_dictionary_to_obj(clip_dictionary: ycdxml.ClipDictionary, name: str) ->
 
         animations_obj_map[animation.hash] = animation_obj
 
+    if isinstance(clip_dictionary, ycdxml.RDRClipDictionary):
+        for entry in clip_dictionary.animation_lookup:
+            matches = [animation for animation in clip_dictionary.animations
+                       if rdr_animation_name_hash(animation.hash) == rdr_animation_name_hash(entry.name)]
+            if len(matches) == 1:
+                animation = matches[0]
+                animations_map[entry.name] = animation
+                animations_obj_map[entry.name] = animations_obj_map[animation.hash]
+
     for clip in clip_dictionary.clips:
         clip.name = clip.name.replace("pack:/", "")
         clip_obj = clip_to_obj(clip, animations_map, animations_obj_map)
         clip_obj.parent = clips_obj
         clip_obj.sollum_game_type = game
 
+    if isinstance(clip_dictionary, ycdxml.RDRClipDictionary):
+        from .yadlink import dictionary_links
+        lookup = {rdr_animation_name_hash(entry.name): entry.dict_index for entry in clip_dictionary.animation_lookup}
+        imports = [entry.value for entry in clip_dictionary.animation_imports]
+        indices = set(lookup.values()) | set(range(len(imports)))
+        pending = [link for link in dictionary_links(clip_dict_obj) if link.rdr_pending]
+        clip_dict_obj.rdr_external_animations = bool(pending or imports)
+        if clip_dict_obj.rdr_external_animations:
+            for index in sorted(indices):
+                entry = clip_dict_obj.rdr_animation_dictionaries.add()
+                entry.dict_index = index
+                entry.resource_name = imports[index] if index < len(imports) else ""
+            for link in pending:
+                key = rdr_animation_name_hash(link.rdr_animation_hash)
+                if key not in lookup:
+                    raise ValueError(f"External animation '{link.rdr_animation_hash}' has no dictionary lookup.")
+                link.rdr_dict_index = lookup[key]
+
     return clip_dict_obj
+
+
+def rdr_animation_name_hash(name):
+    name = name.removeprefix("pack:/").removesuffix(".anim")
+    # CodeX may display a hash collision as name_0xHHHHHHHH.
+    if "_0x" in name and len(name.rsplit("_0x", 1)[1]) == 8:
+        try:
+            return int(name.rsplit("_0x", 1)[1], 16)
+        except ValueError:
+            pass
+    if name.startswith("0x"):
+        return int(name, 16)
+    return jenkhash.name_to_hash(name)
+
+
+def resolve_external_yad_animations(dictionary, animation_dictionaries):
+    """Resolve an external YCD through its lookup names and dictionary indices.
+
+    Keep animations inside the normal hierarchy so target assignment, clip
+    editing and the existing embedded-YCD exporter retain their behavior.
+    """
+    if not isinstance(dictionary, ycdxml.RDRClipDictionary):
+        return
+    existing = {rdr_animation_name_hash(animation.hash) for animation in dictionary.animations}
+    resolved = []
+    for entry in dictionary.animation_lookup:
+        name = entry.name.removeprefix("pack:/").removesuffix(".anim")
+        name_hash = rdr_animation_name_hash(name)
+        if name_hash in existing:
+            continue
+        candidates = [animation for source in animation_dictionaries for animation in source.animations
+                      if rdr_animation_name_hash(animation.hash) == name_hash and animation.dict_index == entry.dict_index]
+        if len(candidates) != 1:
+            reason = "missing" if not candidates else "ambiguous"
+            raise ValueError(f"Animation '{name}', dictionary index {entry.dict_index}: {reason} YAD data. "
+                             "Select the matching .yad.xml files together with the .ycd.xml file.")
+        resolved.append(candidates[0])
+        existing.add(name_hash)
+    # Resolve everything before creating Blender objects or modifying the model.
+    for animation in resolved:
+        dictionary.animations.append(animation)
 
 
 def import_ycd(filepath: str) -> bpy.types.Object:
     ycd_xml = ycdxml.YCD.from_xml_file(filepath)
-
     return clip_dictionary_to_obj(
         ycd_xml,
         os.path.basename(filepath.replace(ycdxml.YCD.file_extension, ""))
     )
+
+
+def import_yad(filepath: str, animation_dictionary=None) -> bpy.types.Object:
+    if animation_dictionary is None:
+        animation_dictionary = ycdxml.YAD.from_xml_file(filepath)
+    set_import_export_current_game(SollumzGame.RDR)
+    # Reuse the normal hierarchy, Action creation, target assignment and NLA
+    # tools. A standalone dictionary has an empty Clips container.
+    dictionary = ycdxml.RDRClipDictionary()
+    dictionary.anim_dict = animation_dictionary
+    obj = clip_dictionary_to_obj(dictionary, os.path.basename(filepath)[:-len(ycdxml.YAD.file_extension)])
+    obj.animation_dictionary_format = "YAD"
+    return obj
