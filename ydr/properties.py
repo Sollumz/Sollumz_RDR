@@ -354,6 +354,11 @@ LIGHT_INTENSITY_SCALE_FACTOR = 500
 
 
 class LightProperties(bpy.types.PropertyGroup):
+    rdr_bone_tag: bpy.props.IntProperty(name="Bone Tag", min=-32768, max=65535)
+    rdr_flashiness: bpy.props.IntProperty(
+        name="Native Flashiness", min=-1, max=255, default=-1,
+        description="Native RDR flashiness value; -1 uses the Flashiness preset",
+    )
     flashiness: bpy.props.EnumProperty(
         name="Flashiness", items=LightFlashinessEnumItems, default=Flashiness.CONSTANT.name
     )

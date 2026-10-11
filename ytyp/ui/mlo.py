@@ -1,13 +1,15 @@
 import bpy
+from .ytyp import YtypFlagsPanel
+from ...tools.blenderhelper import tag_redraw
 from ...tabbed_panels import TabbedPanelHelper, TabPanel
 from ..properties.ytyp import ArchetypeType
+from ...sollumz_properties import SollumzGame
 from ..properties.mlo import RoomProperties
 from ..utils import get_selected_archetype, get_selected_room, get_selected_portal, get_selected_ytyp
 from .archetype import ArchetypeChildPanel
 from ...shared.multiselection import (
     MultiSelectUIListMixin,
     multiselect_ui_draw_list,
-    MultiSelectUIFlagsPanel,
 )
 from ..operators import ytyp as ytyp_ops
 
@@ -38,6 +40,13 @@ class MloChildTabPanel(TabPanel):
     bl_category = SOLLUMZ_PT_MLO_PANEL.bl_category
 
     parent_tab_panel = SOLLUMZ_PT_MLO_PANEL
+
+    @classmethod
+    def _set_active_tab(cls, tab_id: str):
+        super()._set_active_tab(tab_id)
+        bpy.context.scene['_sollumz_ytyp_geometry_tab'] = tab_id
+        tag_redraw(bpy.context, space_type='VIEW_3D', region_type='WINDOW')
+        tag_redraw(bpy.context, space_type='VIEW_3D', region_type='UI')
 
 
 class SOLLUMZ_UL_ROOM_LIST(MultiSelectUIListMixin, bpy.types.UIList):
@@ -83,9 +92,8 @@ class SOLLUMZ_PT_ROOM_PANEL(MloChildTabPanel, bpy.types.Panel):
 
         if not selected_archetype.asset and context.scene.show_room_gizmo:
             row = layout.row()
-            row.alert = True
             row.label(
-                text="Gizmo will not appear when no object is linked.")
+                text="Handles use local coordinates until an object is linked.")
 
         if len(selected_archetype.rooms) == 0:
             return
@@ -96,7 +104,9 @@ class SOLLUMZ_PT_ROOM_PANEL(MloChildTabPanel, bpy.types.Panel):
 
         layout.separator()
         for prop_name in RoomProperties.__annotations__:
-            if prop_name in ["flags", "id", "uuid"]:
+            # Room-local probes are edited in the RDR Volumes and Probes panel,
+            # rather than through the scalar multi-selection property proxies.
+            if prop_name in ["flags", "id", "uuid", "reflection_probes", "reflection_probe_index"]:
                 continue
             layout.prop(selection.owner, getattr(selection.propnames, prop_name))
 
@@ -117,7 +127,7 @@ class SOLLUMZ_MT_rooms_list_context_menu(bpy.types.Menu):
             filter_opts.apply_to_operator(op1)
 
 
-class SOLLUMZ_PT_ROOM_FLAGS_PANEL(MultiSelectUIFlagsPanel, bpy.types.Panel):
+class SOLLUMZ_PT_ROOM_FLAGS_PANEL(YtypFlagsPanel, bpy.types.Panel):
     bl_idname = "SOLLUMZ_PT_ROOM_FLAGS_PANEL"
     bl_label = "Room Flags"
     bl_space_type = "VIEW_3D"
@@ -214,8 +224,7 @@ class SOLLUMZ_PT_PORTAL_PANEL(MloChildTabPanel, bpy.types.Panel):
 
         if not selected_archetype.asset and context.scene.show_portal_gizmo:
             row = layout.row()
-            row.alert = True
-            row.label(text="Gizmo will not appear when no object is linked.")
+            row.label(text="Handles use local coordinates until an object is linked.")
 
         if len(selected_archetype.portals) == 0:
             return
@@ -245,6 +254,9 @@ class SOLLUMZ_PT_PORTAL_PANEL(MloChildTabPanel, bpy.types.Panel):
         layout.prop(selection.owner, selection.propnames.mirror_priority)
         layout.prop(selection.owner, selection.propnames.opacity)
         layout.prop(selection.owner, selection.propnames.audio_occlusion)
+        if get_selected_ytyp(context).game == SollumzGame.RDR:
+            for prop in ('rdr_7c096c2e', 'rdr_91171666', 'rdr_96816ddf', 'rdr_0854fdee'):
+                layout.prop(get_selected_portal(context), prop)
 
 
 class SOLLUMZ_MT_portals_list_context_menu(bpy.types.Menu):
@@ -260,7 +272,7 @@ class SOLLUMZ_MT_portals_list_context_menu(bpy.types.Menu):
             filter_opts.apply_to_operator(op1)
 
 
-class SOLLUMZ_PT_PORTAL_FLAGS_PANEL(MultiSelectUIFlagsPanel, bpy.types.Panel):
+class SOLLUMZ_PT_PORTAL_FLAGS_PANEL(YtypFlagsPanel, bpy.types.Panel):
     bl_idname = "SOLLUMZ_PT_PORTAL_FLAGS_PANEL"
     bl_label = "Portal Flags"
     bl_space_type = "VIEW_3D"
@@ -305,7 +317,8 @@ class SOLLUMZ_PT_TIMECYCLE_MODIFIER_PANEL(MloChildTabPanel, bpy.types.Panel):
     def poll_tab(cls, context):
         selected_archetype = get_selected_archetype(context)
 
-        return selected_archetype.type == ArchetypeType.MLO
+        return (selected_archetype.type == ArchetypeType.MLO
+                and get_selected_ytyp(context).game == SollumzGame.GTA)
 
     def draw(self, context):
         # TODO(multiselect): think how we should manage disabling panels when multiple selection enabled
@@ -328,8 +341,7 @@ class SOLLUMZ_PT_TIMECYCLE_MODIFIER_PANEL(MloChildTabPanel, bpy.types.Panel):
 
         if not selected_archetype.asset and context.scene.show_mlo_tcm_gizmo:
             row = layout.row()
-            row.alert = True
-            row.label(text="Gizmo will not appear when no object is linked.")
+            row.label(text="Handles use local coordinates until an object is linked.")
 
         if len(selected_archetype.timecycle_modifiers) == 0:
             return
@@ -362,7 +374,7 @@ class SOLLUMZ_MT_timecycle_modifiers_list_context_menu(bpy.types.Menu):
             filter_opts.apply_to_operator(op1)
 
 
-class SOLLUMZ_PT_MLO_FLAGS_PANEL(MloChildTabPanel, MultiSelectUIFlagsPanel, bpy.types.Panel):
+class SOLLUMZ_PT_MLO_FLAGS_PANEL(MloChildTabPanel, YtypFlagsPanel, bpy.types.Panel):
     bl_idname = "SOLLUMZ_PT_MLO_FLAGS_PANEL"
     bl_label = "MLO Flags"
 
@@ -382,3 +394,109 @@ class SOLLUMZ_PT_MLO_FLAGS_PANEL(MloChildTabPanel, MultiSelectUIFlagsPanel, bpy.
     def get_flags_selection(self, context):
         selected_ytyp = get_selected_ytyp(context)
         return selected_ytyp.archetypes.selection.mlo_flags
+
+
+class SOLLUMZ_UL_RDR_MLO_ITEMS(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout.prop(item, 'name', text='', emboss=False, icon='CUBE')
+
+
+class RdrMloVolumesPanelHelper:
+    @classmethod
+    def poll_tab(cls, context):
+        ytyp = get_selected_ytyp(context)
+        archetype = get_selected_archetype(context)
+        return (ytyp is not None and ytyp.game == SollumzGame.RDR
+                and archetype is not None and archetype.type == ArchetypeType.MLO)
+
+    def draw_gizmo_toggle(self, layout, context):
+        row = layout.row()
+        row.use_property_split = False
+        row.prop(context.scene, self.gizmo_toggle)
+
+    def draw_collection(self, layout, owner, collection_name, index_name, kind, label, props):
+        layout.enabled = not get_selected_ytyp(bpy.context).archetypes.has_multiple_selection
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        box = layout.box()
+        box.label(text=label)
+        row = box.row()
+        row.template_list('SOLLUMZ_UL_RDR_MLO_ITEMS', collection_name, owner, collection_name,
+                          owner, index_name, rows=2)
+        col = row.column(align=True)
+        col.operator('sollumz.add_rdr_mlo_item', text='', icon='ADD').kind = kind
+        col.operator('sollumz.remove_rdr_mlo_item', text='', icon='REMOVE').kind = kind
+        collection = getattr(owner, collection_name)
+        index = getattr(owner, index_name)
+        if index < len(collection):
+            item = collection[index]
+            for prop in props:
+                box.prop(item, prop)
+
+
+class SOLLUMZ_PT_RDR_MLO_VOLUMES_PANEL(RdrMloVolumesPanelHelper, MloChildTabPanel, bpy.types.Panel):
+    bl_label = 'Main Activation'
+    bl_idname = 'SOLLUMZ_PT_RDR_MLO_VOLUMES_PANEL'
+    gizmo_toggle = 'show_main_activation_gizmo'
+    icon = 'SPHERE'
+    bl_order = 6
+
+    def draw(self, context):
+        self.draw_gizmo_toggle(self.layout, context)
+        layout = self.layout
+        layout.enabled = not get_selected_ytyp(context).archetypes.has_multiple_selection
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        archetype = get_selected_archetype(context)
+        layout.prop(archetype, 'uses_activation_volumes')
+        for prop in ('center', 'radius', 'flags'):
+            layout.prop(archetype.main_activation_volume, prop)
+
+
+class SOLLUMZ_PT_RDR_MLO_EXTRA_VOLUMES_PANEL(RdrMloVolumesPanelHelper, MloChildTabPanel, bpy.types.Panel):
+    bl_label = 'Extra Activation'
+    bl_idname = 'SOLLUMZ_PT_RDR_MLO_EXTRA_VOLUMES_PANEL'
+    gizmo_toggle = 'show_extra_activation_gizmo'
+    icon = 'SPHERE'
+    bl_order = 7
+
+    def draw(self, context):
+        self.draw_gizmo_toggle(self.layout, context)
+        archetype = get_selected_archetype(context)
+        self.draw_collection(self.layout, archetype, 'extra_activation_volumes', 'extra_activation_volume_index',
+                             'EXTRA', 'Extra Activation Spheres', ('center', 'radius', 'flags'))
+
+
+class SOLLUMZ_PT_RDR_MLO_TIMECYCLE_VOLUMES_PANEL(RdrMloVolumesPanelHelper, MloChildTabPanel, bpy.types.Panel):
+    bl_label = 'Timecycle Volumes'
+    bl_idname = 'SOLLUMZ_PT_RDR_MLO_TIMECYCLE_VOLUMES_PANEL'
+    gizmo_toggle = 'show_timecycle_volume_gizmo'
+    icon = 'MOD_TIME'
+    bl_order = 8
+
+    def draw(self, context):
+        self.draw_gizmo_toggle(self.layout, context)
+        archetype = get_selected_archetype(context)
+        self.draw_collection(self.layout, archetype, 'timecycle_volumes', 'timecycle_volume_index', 'TCV',
+                             'Timecycle Volumes', ('center', 'orientation', 'scale', 'vol_type',
+                                                  'percentage', 'range', 'start_hour', 'end_hour'))
+
+
+class SOLLUMZ_PT_RDR_MLO_PROBES_PANEL(RdrMloVolumesPanelHelper, MloChildTabPanel, bpy.types.Panel):
+    bl_label = 'Reflection Probes'
+    bl_idname = 'SOLLUMZ_PT_RDR_MLO_PROBES_PANEL'
+    gizmo_toggle = 'show_reflection_probe_gizmo'
+    icon = 'OUTLINER_OB_LIGHTPROBE'
+    bl_order = 9
+
+    def draw(self, context):
+        self.draw_gizmo_toggle(self.layout, context)
+        room = get_selected_room(context)
+        if room is None:
+            self.layout.label(text='Select a room to edit its reflection probes.')
+            return
+        self.draw_collection(self.layout, room, 'reflection_probes', 'reflection_probe_index', 'PROBE',
+                             f'Reflection Probes: {room.name}', ('min_extents', 'max_extents', 'rotation',
+                                 'center_offset', 'influence_extents', 'probe_priority', 'guid'))
+        if room.reflection_probes:
+            self.layout.operator('sollumz.generate_rdr_guid', icon='FILE_REFRESH').kind = 'PROBE'

@@ -16,6 +16,11 @@ from ..properties.extensions import ExtensionType, ExtensionProperties
 DEBUG_DRAW = False
 
 
+def redraw_extension_properties(context):
+    for region in ('WINDOW', 'UI', 'TOOL_PROPS'):
+        tag_redraw(context, space_type='VIEW_3D', region_type=region)
+
+
 def iter_archetype_extensions(context) -> Iterator[tuple[int, int]]:
     """Iterate visible archetype extensions from the selected YTYP. Yields a tuple with archetype index and extension
     index.
@@ -501,6 +506,7 @@ class SOLLUMZ_OT_extension_translate(bpy.types.Operator):
     def execute(self, context):
         ext = get_selected_extension(context)
         ext.translate(self.delta_position)
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
 
@@ -518,7 +524,10 @@ class SOLLUMZ_OT_extension_rotate(bpy.types.Operator):
             self.rotate_light_shaft(ext)
         else:
             ext_props = ext.get_properties()
-            ext_props.offset_rotation.rotate(self.delta_rotation)
+            rotation = ext_props.offset_rotation.copy()
+            rotation.rotate(self.delta_rotation)
+            ext_props.offset_rotation = rotation
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
     def rotate_light_shaft(self, ext: ExtensionProperties):
@@ -543,7 +552,9 @@ class SOLLUMZ_OT_extension_rotate(bpy.types.Operator):
         ext_props.cornerB = b + o
         ext_props.cornerC = c + o
         ext_props.cornerD = d + o
-        ext_props.direction.rotate(self.delta_rotation)
+        direction = ext_props.direction.copy()
+        direction.rotate(self.delta_rotation)
+        ext_props.direction = direction
 
 
 class SOLLUMZ_OT_extension_rotate_ladder_normal(bpy.types.Operator):
@@ -558,7 +569,12 @@ class SOLLUMZ_OT_extension_rotate_ladder_normal(bpy.types.Operator):
         ext = get_selected_extension(context)
         ext_props = ext.get_properties()
 
-        ext_props.normal.rotate(Quaternion((0.0, 0.0, 1.0), self.delta_angle))
+        normal = ext_props.normal.copy()
+        if normal.length_squared < 1e-12:
+            normal = Vector((0.0, 1.0, 0.0))
+        normal.rotate(Quaternion((0.0, 0.0, 1.0), self.delta_angle))
+        ext_props.normal = normal
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
 
@@ -577,6 +593,7 @@ class SOLLUMZ_OT_extension_translate_ladder_bottom_z(bpy.types.Operator):
         ext_props.bottom.z += self.delta_z
         ext_props.top.z = max(ext_props.top.z, ext_props.bottom.z)
         ext_props.offset_position = ext_props.top
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
 
@@ -621,6 +638,7 @@ class SOLLUMZ_OT_extension_scale_light_shaft_frame(bpy.types.Operator):
         ext_props.cornerB = new_b
         ext_props.cornerC = new_c
         ext_props.cornerD = new_d
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
 
@@ -653,6 +671,7 @@ class SOLLUMZ_OT_extension_offset_light_shaft_end_point(bpy.types.Operator):
         end_vec += up * self.delta_offset.y
         ext_props.length = (end_vec - o).length
         ext_props.direction = (end_vec - o).normalized()
+        redraw_extension_properties(context)
         return {"FINISHED"}
 
 
@@ -767,52 +786,37 @@ class SOLLUMZ_GGT_archetype_extensions(bpy.types.GizmoGroup):
 
     # Gizmos getter/setter handlers
     def handler_get_x(self):
-        if not self.translation_gizmo_x_just_called_set:
-            self.translation_gizmo_last_offset_x = 0.0
-        self.translation_gizmo_x_just_called_set = False
         return self.translation_gizmo_last_offset_x
 
     def handler_get_y(self):
-        if not self.translation_gizmo_y_just_called_set:
-            self.translation_gizmo_last_offset_y = 0.0
-        self.translation_gizmo_y_just_called_set = False
         return self.translation_gizmo_last_offset_y
 
     def handler_get_z(self):
-        if not self.translation_gizmo_z_just_called_set:
-            self.translation_gizmo_last_offset_z = 0.0
-        self.translation_gizmo_z_just_called_set = False
         return self.translation_gizmo_last_offset_z
 
     def handler_set_x(self, value):
         delta_offset = value - self.translation_gizmo_last_offset_x
         self.translation_gizmo_last_offset_x = value
         self.translate_extension(bpy.context, delta_offset, "X")
-        self.translation_gizmo_x_just_called_set = True
 
     def handler_set_y(self, value):
         delta_offset = value - self.translation_gizmo_last_offset_y
         self.translation_gizmo_last_offset_y = value
         self.translate_extension(bpy.context, delta_offset, "Y")
-        self.translation_gizmo_y_just_called_set = True
 
     def handler_set_z(self, value):
         delta_offset = value - self.translation_gizmo_last_offset_z
         self.translation_gizmo_last_offset_z = value
         self.translate_extension(bpy.context, delta_offset, "Z")
-        self.translation_gizmo_z_just_called_set = True
 
     def handler_get_rotation_x(self):
-        self.rotation_gizmo_last_angle = 0.0
-        return 0.0
+        return self.rotation_gizmo_last_angle
 
     def handler_get_rotation_y(self):
-        self.rotation_gizmo_last_angle = 0.0
-        return 0.0
+        return self.rotation_gizmo_last_angle
 
     def handler_get_rotation_z(self):
-        self.rotation_gizmo_last_angle = 0.0
-        return 0.0
+        return self.rotation_gizmo_last_angle
 
     def handler_set_rotation_x(self, value):
         delta_angle = value - self.rotation_gizmo_last_angle
@@ -830,20 +834,15 @@ class SOLLUMZ_GGT_archetype_extensions(bpy.types.GizmoGroup):
         self.rotate_extension(bpy.context, -delta_angle, "Z")
 
     def handler_get_ladder_bottom_z(self):
-        if not self.ladder_bottom_gizmo_just_called_set:
-            self.ladder_bottom_gizmo_last_offset_z = 0.0
-        self.ladder_bottom_gizmo_just_called_set = False
         return self.ladder_bottom_gizmo_last_offset_z
 
     def handler_set_ladder_bottom_z(self, value):
         delta_z = self.ladder_bottom_gizmo_last_offset_z - value
         self.ladder_bottom_gizmo_last_offset_z = value
         self.translate_extension_ladder_bottom_z(bpy.context, delta_z)
-        self.ladder_bottom_gizmo_just_called_set = True
 
     def handler_get_ladder_normal_angle(self):
-        self.rotation_gizmo_last_angle = 0.0
-        return 0.0
+        return self.rotation_gizmo_last_angle
 
     def handler_set_ladder_normal_angle(self, value):
         delta_angle = value - self.rotation_gizmo_last_angle
@@ -1052,19 +1051,12 @@ class SOLLUMZ_GGT_archetype_extensions(bpy.types.GizmoGroup):
         self.translation_gizmo_last_offset_x = 0.0
         self.translation_gizmo_last_offset_y = 0.0
         self.translation_gizmo_last_offset_z = 0.0
-        # Arrow gizmos call `set` -> `get` when in-use; when released it calls `get` once again
-        # (`set` -> `get` -> `get`), we use this variables to detect the last `get` and reset the
-        # `last_offset_*` variables to 0.0, otherwise the arrow gizmo is placed at the last offset.
-        self.translation_gizmo_x_just_called_set = False
-        self.translation_gizmo_y_just_called_set = False
-        self.translation_gizmo_z_just_called_set = False
 
         self.rotation_gizmos = (dial_x, dial_y, dial_z)
         self.rotation_gizmo_last_angle = 0.0
 
         self.ladder_bottom_arrow = ladder_bottom_arrow
         self.ladder_bottom_gizmo_last_offset_z = 0.0
-        self.ladder_bottom_gizmo_just_called_set = False
         self.ladder_normal_dial = ladder_normal_dial
 
         self.light_shaft_cage = light_shaft_cage
@@ -1159,6 +1151,16 @@ class SOLLUMZ_GGT_archetype_extensions(bpy.types.GizmoGroup):
             self.extension_gizmos[i].hide = True
 
     def draw_prepare(self, context):
+        # Blender may read targets repeatedly during a drag. Reset only after
+        # the gizmo leaves modal state, never from a target getter.
+        for axis, gizmo in zip(('x', 'y', 'z'), self.translation_gizmos):
+            if not gizmo.is_modal:
+                setattr(self, f'translation_gizmo_last_offset_{axis}', 0.0)
+        if not self.ladder_bottom_arrow.is_modal:
+            self.ladder_bottom_gizmo_last_offset_z = 0.0
+        if not any(gizmo.is_modal for gizmo in (*self.rotation_gizmos, self.ladder_normal_dial)):
+            self.rotation_gizmo_last_angle = 0.0
+
         def _prepare_arrow(arrow_gizmo, matrix_basis):
             if arrow_gizmo.is_modal:
                 arrow_gizmo.draw_options = {"ORIGIN", "STEM"}

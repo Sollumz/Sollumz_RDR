@@ -3,6 +3,7 @@ from bpy.types import (
     UILayout
 )
 from ...sollumz_ui import BasicListHelper, draw_list_with_add_remove
+from ...sollumz_properties import SollumzGame
 from ..properties.extensions import ExtensionsContainer
 from ..utils import get_selected_archetype, get_selected_ytyp
 from .archetype import ArchetypeChildTabPanel
@@ -33,6 +34,17 @@ class ExtensionsPanelHelper:
         layout.use_property_split = True
         layout.use_property_decorate = False
         extensions_container = self.get_extensions_container(context)
+        ytyp = get_selected_ytyp(context)
+        if ytyp and ytyp.game == SollumzGame.RDR and extensions_container.get('_rdr_xml'):
+            from xml.etree import ElementTree as ET
+            from ...cwxml.ymap import ExtensionsList
+            source = ET.fromstring(extensions_container['_rdr_xml'])
+            opaque_count = sum(
+                ExtensionsList.get_extension_xml_class_from_type(item.get('type')) is None
+                for item in source.findall('./extensions/Item')
+            )
+            if opaque_count:
+                layout.label(text=f'{opaque_count} other RDR extensions preserved on export.', icon='INFO')
 
         _, side_col = draw_list_with_add_remove(layout, self.ADD_OPERATOR_ID, self.DELETE_OPERATOR_ID,
                                                 self.EXTENSIONS_LIST_ID, "", extensions_container, "extensions",
@@ -59,6 +71,10 @@ class ExtensionsPanelHelper:
             extension_properties.draw_props_pre(layout)
             extension_properties.draw_props(layout)
             extension_properties.draw_props_post(layout)
+            if (ytyp and ytyp.game == SollumzGame.RDR
+                    and selected_extension.extension_type == 'CExtensionDefLightEffect'
+                    and extension_properties.linked_lights_object is None):
+                layout.label(text='Native light instances are preserved on export.', icon='INFO')
 
 
 class SOLLUMZ_UL_ARCHETYPE_EXTENSIONS_LIST(ExtensionsListHelper, bpy.types.UIList):

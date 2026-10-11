@@ -74,7 +74,7 @@ def ExtensionTypeEnumItems(self, context: Optional[Context]):
 
 def ExtensionTypeForArchetypesEnumItems(self, context: Optional[Context]):
     try:
-        return ExtensionTypeForArchetypesEnumItems._backing
+        ExtensionTypeForArchetypesEnumItems._backing
     except AttributeError:
         ExtensionTypeForArchetypesEnumItems._backing = tuple(e for e in ExtensionTypeEnumItems(self, context) if e[0] in {
             ExtensionType.PARTICLE,
@@ -89,7 +89,20 @@ def ExtensionTypeForArchetypesEnumItems(self, context: Optional[Context]):
             ExtensionType.PROC_OBJECT,
             ExtensionType.EXPRESSION,
         })
-        return ExtensionTypeForArchetypesEnumItems._backing
+    ytyp = get_selected_ytyp(context) if context else None
+    # RNA reads enum values without a context, including after loading a .blend.
+    # Keep an existing light effect representable even when another YTYP is selected.
+    if (ytyp is not None and ytyp.game == SollumzGame.RDR
+            or self.extension_type == ExtensionType.LIGHT_EFFECT):
+        try:
+            return ExtensionTypeForArchetypesEnumItems._rdr_backing
+        except AttributeError:
+            allowed = {item[0] for item in ExtensionTypeForArchetypesEnumItems._backing}
+            allowed.add(ExtensionType.LIGHT_EFFECT)
+            ExtensionTypeForArchetypesEnumItems._rdr_backing = tuple(
+                item for item in ExtensionTypeEnumItems(self, context) if item[0] in allowed)
+            return ExtensionTypeForArchetypesEnumItems._rdr_backing
+    return ExtensionTypeForArchetypesEnumItems._backing
 
 
 def ExtensionTypeForEntitiesEnumItems(self, context: Optional[Context]):
@@ -367,7 +380,7 @@ ParticleFxTypeEnumItems = tuple(label and (enum.name, f"{label} ({enum.value})",
 class ParticleExtensionProperties(ExtensionWithBoneTagMixin, BaseExtensionProperties, PropertyGroup):
     offset_rotation: FloatVectorProperty(name="Offset Rotation", subtype="EULER")
     fx_name: StringProperty(name="FX Name")
-    fx_type: IntProperty(name="FX Type", min=0, max=7, default=ParticleFxType.AMBIENT.value)
+    fx_type: IntProperty(name="FX Type", min=0, default=ParticleFxType.AMBIENT.value)
     bone_tag: IntProperty(name="Bone Tag", default=0)
     scale: FloatProperty(name="Scale", min=0.0, default=1.0)
     probability: IntProperty(name="Probability", min=0, max=100, default=100, subtype="PERCENTAGE")
@@ -452,6 +465,8 @@ class ParticleExtensionProperties(ExtensionWithBoneTagMixin, BaseExtensionProper
             "probability",
         ):
             icon = "NONE"
+            if prop_name == 'fx_type_enum' and self.fx_type > 7:
+                prop_name = 'fx_type'
             row = layout.row()
             if prop_name == "bone_tag":
                 icon = "BONE_DATA"
@@ -717,7 +732,7 @@ class ExplosionExtensionProperties(ExtensionWithBoneTagMixin, BaseExtensionPrope
 class LadderExtensionProperties(BaseExtensionProperties, PropertyGroup):
     bottom: FloatVectorProperty(name="Bottom", subtype="TRANSLATION")
     top: FloatVectorProperty(name="Top", subtype="TRANSLATION")
-    normal: FloatVectorProperty(name="Normal", subtype="TRANSLATION")
+    normal: FloatVectorProperty(name="Normal", subtype="TRANSLATION", default=(0.0, 1.0, 0.0))
     material_type: StringProperty(name="Material Type", default="METAL_SOLID_LADDER")
     template: StringProperty(name="Template", default="default")
     can_get_off_at_top: BoolProperty(name="Can Get Off At Top", default=True)
@@ -934,11 +949,35 @@ class LightEffectExtensionProperties(BaseExtensionProperties, PropertyGroup):
 
     linked_lights_object: PointerProperty(name="Linked Lights", type=Object)
 
+    def draw_props(self, layout: UILayout):
+        ytyp = get_selected_ytyp(bpy.context)
+        if ytyp is None or ytyp.game == SollumzGame.GTA:
+            super().draw_props(layout)
+            return
+        layout.prop(self, "offset_position")
+        parent = self.linked_lights_object
+        if parent is not None:
+            group = self.get("_rdr_light_group", "")
+            count = sum(obj.type == "LIGHT" and (not group or obj.get("_rdr_light_group") == group)
+                        for obj in parent.children_recursive)
+            layout.label(text=f"{count} lights attached to {parent.name}", icon="OUTLINER_OB_LIGHT")
+
     def draw_props_post(self, layout: UILayout):
         from ..operators.extensions import SOLLUMZ_OT_light_effect_create_lights_from_entity
+        from ..utils import get_selected_entity_extension
         layout.separator()
+        extension = get_selected_entity_extension(bpy.context)
+        ytyp = get_selected_ytyp(bpy.context)
+        if (ytyp is not None and ytyp.game == SollumzGame.GTA
+                and extension is not None and extension.light_effect_properties == self):
+            row = layout.row()
+            row.operator(SOLLUMZ_OT_light_effect_create_lights_from_entity.bl_idname)
         row = layout.row()
-        row.operator(SOLLUMZ_OT_light_effect_create_lights_from_entity.bl_idname)
+        op = row.operator("sollumz.light_effect_select_lights", icon="OUTLINER_OB_LIGHT")
+        op.lights_object_name = self.linked_lights_object.name if self.linked_lights_object else ""
+        op.light_group = self.get("_rdr_light_group", "")
+        if self.linked_lights_object:
+            layout.label(text="Move lights in the viewport; edit them in Light Data > Sollumz.")
 
 
 class ExtensionProperties(PropertyGroup):
@@ -1062,6 +1101,9 @@ class ExtensionsContainer:
 
     def duplicate_selected_extension(self) -> ExtensionProperties:
         def _copy_property_group(dst: PropertyGroup, src: PropertyGroup):
+            for key in ("_rdr_xml", "_rdr_light_group", "_rdr_lights_imported"):
+                if key in src:
+                    dst[key] = src[key]
             if getattr(src, "offset_position", None) is not None:
                 # __annotations__ doesn't include `offset_position` as it is from a base class
                 # manually copy it instead

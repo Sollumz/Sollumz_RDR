@@ -14,7 +14,10 @@ from ...sollumz_preferences import get_addon_preferences
 from ...tools.blenderhelper import get_children_recursive, tag_redraw
 from ...sollumz_properties import SollumType, items_from_enums, ArchetypeType, AssetType, TimeFlagsMixin, SOLLUMZ_UI_NAMES, SollumzGame, MapEntityType
 from ...tools.utils import get_list_item
-from .mlo import EntitySetProperties, RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties
+from .mlo import (
+    EntitySetProperties, RoomProperties, PortalProperties, MloEntityProperties, TimecycleModifierProperties,
+    TimecycleVolumeProperties, ActivationVolumeProperties,
+)
 from .flags import ArchetypeFlags, MloFlags
 from .extensions import ExtensionsContainer, ExtensionType
 from ...shared.multiselection import (
@@ -166,6 +169,7 @@ class PortalFlagsSelectionAccess(MultiSelectNestedAccess):
     flag12: MultiSelectProperty()
     flag13: MultiSelectProperty()
     flag14: MultiSelectProperty()
+    flag15: MultiSelectProperty()
 
 
 class PortalSelectionAccess(MultiSelectAccess):
@@ -220,6 +224,8 @@ class MloEntityFlagsSelectionAccess(MultiSelectNestedAccess):
 
 
 class MloEntitySelectionAccess(MultiSelectAccess):
+    rdr_id: MultiSelectProperty()
+    power_grid_id: MultiSelectProperty()
     # from EntityProperties
     archetype_name: MultiSelectProperty()
     guid: MultiSelectProperty()
@@ -352,7 +358,7 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
 
         return item
 
-    def new_entity(self) -> MloEntityProperties:
+    def new_entity(self, *, generate_rdr_id=True) -> MloEntityProperties:
         item_id = self.get_new_item_id(self.entities)
 
         item = self.entities.add()
@@ -365,6 +371,11 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
         item.mlo_archetype_uuid = self.uuid
 
         item.archetype_name = f"Entity.{item_id}"
+        from ..utils import new_rdr_guid
+        ytyp_path = self.path_from_id().rsplit('.archetypes', 1)[0]
+        ytyp = self.id_data.path_resolve(ytyp_path)
+        if generate_rdr_id and ytyp.game == SollumzGame.RDR:
+            item.rdr_id = new_rdr_guid()
 
         preferences = get_addon_preferences(bpy.context)
         if preferences.default_flags_entity:
@@ -454,10 +465,32 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
     lod_dist: bpy.props.FloatProperty(name="Lod Distance", default=200, min=-1)
     flags: bpy.props.PointerProperty(type=ArchetypeFlags, name="Flags")
     # v RDR
-    load_flags: bpy.props.IntProperty(name="Load Flags")
-    avoidanceflags: bpy.props.IntProperty(name="Avoidance Flags")
-    guid: bpy.props.IntProperty(name="GUID")
-    unknown_1: bpy.props.EnumProperty(items=items_from_enums(MapEntityType), name="Unknown 1")
+    # String wrappers keep old integer ID properties readable, without truncating UINT64 values.
+    def get_load_flags(self):
+        return str(self.get('load_flags', '0'))
+
+    def set_load_flags(self, value):
+        from ...cwxml.ytyp import unsigned
+        self['load_flags'] = str(unsigned(value))
+
+    def get_avoidanceflags(self):
+        return str(self.get('avoidanceflags', '0'))
+
+    def set_avoidanceflags(self, value):
+        from ...cwxml.ytyp import unsigned
+        self['avoidanceflags'] = str(unsigned(value, 32))
+
+    def get_guid(self):
+        return str(self.get('guid', '0'))
+
+    def set_guid(self, value):
+        from ...cwxml.ytyp import unsigned
+        self['guid'] = str(unsigned(value))
+
+    load_flags: bpy.props.StringProperty(name="Load Flags", get=get_load_flags, set=set_load_flags)
+    avoidanceflags: bpy.props.StringProperty(name="Avoidance Flags", get=get_avoidanceflags, set=set_avoidanceflags)
+    guid: bpy.props.StringProperty(name="GUID", get=get_guid, set=set_guid)
+    unknown_1: bpy.props.EnumProperty(items=items_from_enums(MapEntityType), name="Map Entity Factory Type")
     # ^ RDR
     special_attribute: bpy.props.EnumProperty(
         name="Special Attribute", items=SpecialAttributeEnumItems, default=SpecialAttribute.NOTHING_SPECIAL.name)
@@ -468,6 +501,10 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
     drawable_dictionary: bpy.props.StringProperty(name="Drawable Dictionary")
     physics_dictionary: bpy.props.StringProperty(name="Physics Dictionary")
     asset_type: bpy.props.EnumProperty(items=items_from_enums(AssetType), name="Asset Type")
+    rdr_asset_type_none: bpy.props.BoolProperty(
+        name="Native Asset Type -1",
+        description="Preserve RDR's native no-asset sentinel instead of ASSET_TYPE_ASSETLESS",
+    )
     asset: bpy.props.PointerProperty(name="Asset", type=bpy.types.Object, update=update_asset)
     asset_name: bpy.props.StringProperty(name="Asset Name")
     # Time archetype
@@ -479,6 +516,24 @@ class ArchetypeProperties(bpy.types.PropertyGroup, ExtensionsContainer):
     entities: MultiSelectCollection[MloEntityProperties, MloEntitySelectionAccess]
     timecycle_modifiers: MultiSelectCollection[TimecycleModifierProperties, TimecycleModifierSelectionAccess]
     entity_sets: MultiSelectCollection[EntitySetProperties, EntitySetSelectionAccess]
+    timecycle_volumes: bpy.props.CollectionProperty(type=TimecycleVolumeProperties)
+    timecycle_volume_index: bpy.props.IntProperty(min=0)
+    extra_activation_volumes: bpy.props.CollectionProperty(type=ActivationVolumeProperties)
+    extra_activation_volume_index: bpy.props.IntProperty(min=0)
+    main_activation_volume: bpy.props.PointerProperty(type=ActivationVolumeProperties)
+    uses_activation_volumes: bpy.props.BoolProperty(name="Use Activation Volumes")
+    bounds_from_asset: bpy.props.BoolProperty(name="Calculate Bounds from Linked Object", default=True)
+    edit_geometry: bpy.props.EnumProperty(name="Viewport Handles", items=[
+        ('NONE', 'None', 'Hide editing handles'),
+        ('BOUNDS', 'Archetype Bounds', 'Drag the bounds and sphere in archetype local space'),
+        ('ROOM', 'Room Bounds', 'Drag the selected room bounds'),
+        ('PORTAL', 'Portal Corners', 'Drag the selected portal corners'),
+        ('TCM', 'Timecycle Sphere', 'Drag the selected timecycle sphere'),
+        ('TCV', 'Timecycle Volume', 'Drag the selected timecycle volume center'),
+        ('MAIN', 'Main Activation Sphere', 'Drag the main activation sphere'),
+        ('EXTRA', 'Extra Activation Sphere', 'Drag the selected extra activation sphere'),
+        ('PROBE', 'Reflection Probe', 'Drag selected probe bounds and center'),
+    ], default='NONE')
 
     id: bpy.props.IntProperty(default=-1)
     uuid: bpy.props.StringProperty(name="UUID", maxlen=36)  # unique within the whole .blend
@@ -655,6 +710,7 @@ class ArchetypeMloFlagsSelectionAccess(MultiSelectNestedAccess):
     flag14: MultiSelectProperty()
     flag15: MultiSelectProperty()
     flag16: MultiSelectProperty()
+    flag17: MultiSelectProperty()
 
 
 class ArchetypeSelectionAccess(MultiSelectAccess):
@@ -762,12 +818,27 @@ class CMapTypesProperties(PropertyGroup):
         return get_list_item(self.archetypes, self.archetypes.active_index)
 
 
+def update_gizmo_visibility(self, context):
+    tag_redraw(context, space_type="VIEW_3D", region_type="WINDOW")
+    tag_redraw(context, space_type="VIEW_3D", region_type="UI")
+
+
 def register():
     bpy.types.Scene.ytyps = bpy.props.CollectionProperty(type=CMapTypesProperties, name="YTYPs")
     bpy.types.Scene.ytyp_index = bpy.props.IntProperty(name="YTYP")
-    bpy.types.Scene.show_room_gizmo = bpy.props.BoolProperty(name="Show Room Gizmo", default=True)
-    bpy.types.Scene.show_portal_gizmo = bpy.props.BoolProperty(name="Show Portal Gizmo", default=True)
-    bpy.types.Scene.show_mlo_tcm_gizmo = bpy.props.BoolProperty(name="Show Timecycle Modifier Gizmo", default=True)
+    bpy.types.Scene.show_room_gizmo = bpy.props.BoolProperty(name="Show Room Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_portal_gizmo = bpy.props.BoolProperty(name="Show Portal Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_mlo_tcm_gizmo = bpy.props.BoolProperty(name="Show Timecycle Modifier Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_archetype_bounds_gizmo = bpy.props.BoolProperty(
+        name="Show Bounds Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_main_activation_gizmo = bpy.props.BoolProperty(
+        name="Show Main Activation Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_extra_activation_gizmo = bpy.props.BoolProperty(
+        name="Show Extra Activation Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_timecycle_volume_gizmo = bpy.props.BoolProperty(
+        name="Show Timecycle Volume Gizmo", default=True, update=update_gizmo_visibility)
+    bpy.types.Scene.show_reflection_probe_gizmo = bpy.props.BoolProperty(
+        name="Show Reflection Probe Gizmo", default=True, update=update_gizmo_visibility)
     sync_default = get_addon_preferences().default_sync_selection_enabled
     bpy.types.Scene.sz_sync_archetypes_selection = BoolProperty(
         name="Sync Selection", description="Synchronize archetypes selection with objects selection in the scene.",
@@ -785,6 +856,11 @@ def register():
         name="Apply Parent Transforms", description="Apply transforms to all assets when calculating Archetype extents")
 
 def unregister():
+    del bpy.types.Scene.show_archetype_bounds_gizmo
+    del bpy.types.Scene.show_main_activation_gizmo
+    del bpy.types.Scene.show_extra_activation_gizmo
+    del bpy.types.Scene.show_timecycle_volume_gizmo
+    del bpy.types.Scene.show_reflection_probe_gizmo
     del bpy.types.Scene.ytyps
     del bpy.types.Scene.ytyp_index
     del bpy.types.Scene.show_room_gizmo

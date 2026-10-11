@@ -1,4 +1,5 @@
 import bpy
+from .ytyp import YtypFlagsPanel
 from ...tabbed_panels import TabbedPanelHelper, TabPanel
 from ..properties.ytyp import ArchetypeType, MloEntitySelectionAccess
 from ..properties.mlo import EntityProperties, MloEntityProperties
@@ -9,7 +10,6 @@ from ...shared.multiselection import (
     MultiSelectCollection,
     MultiSelectUIListMixin,
     multiselect_ui_draw_list,
-    MultiSelectUIFlagsPanel,
 )
 from ..operators import ytyp as ytyp_ops
 from ...sollumz_properties import SollumzGame
@@ -220,6 +220,16 @@ class SOLLUMZ_PT_MLO_ENTITY_PANEL(MloEntityChildTabPanel, bpy.types.Panel):
                 continue
             elif get_selected_ytyp(context).game == SollumzGame.GTA and prop_name in ["blend_age_layer", "blend_age_dirt"]:
                 continue
+            elif get_selected_ytyp(context).game == SollumzGame.RDR and prop_name in {
+                    'ambient_occlusion_multiplier', 'artificial_ambient_occlusion', 'tint_value'}:
+                continue
+            elif get_selected_ytyp(context).game == SollumzGame.RDR and prop_name == 'guid':
+                layout.prop(selection.owner, selection.propnames.rdr_id)
+                row = layout.row()
+                row.enabled = not get_selected_archetype(context).entities.has_multiple_selection
+                row.operator('sollumz.generate_rdr_guid', icon='FILE_REFRESH').kind = 'ENTITY'
+                layout.prop(selection.owner, selection.propnames.power_grid_id)
+                continue
 
             layout.prop(selection.owner, getattr(selection.propnames, prop_name))
 
@@ -252,7 +262,7 @@ class SOLLUMZ_PT_ENTITY_EXTENSIONS_PANEL(MloEntityChildTabPanel, ExtensionsPanel
         super().draw(context)
 
 
-class SOLLUMZ_PT_ENTITY_FLAGS_PANEL(MloEntityChildTabPanel, MultiSelectUIFlagsPanel, bpy.types.Panel):
+class SOLLUMZ_PT_ENTITY_FLAGS_PANEL(MloEntityChildTabPanel, YtypFlagsPanel, bpy.types.Panel):
     bl_idname = "SOLLUMZ_PT_ENTITY_FLAGS_PANEL"
     bl_label = "Entity Flags"
 

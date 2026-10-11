@@ -1,6 +1,6 @@
 import bpy
 from typing import Union
-from mathutils import Vector, Quaternion
+from mathutils import Vector, Quaternion, Matrix
 from ..cwxml import ytyp as ytypxml, ymap as ymapxml
 from ..sollumz_properties import ArchetypeType, AssetType, EntityLodLevel, EntityPriorityLevel, SollumzGame, MapEntityType, import_export_current_game as current_game, set_import_export_current_game
 from ..sollumz_preferences import get_import_settings
@@ -8,12 +8,14 @@ from ..sollumz_helper import duplicate_object_with_children
 from .properties.ytyp import CMapTypesProperties, ArchetypeProperties, SpecialAttribute, TimecycleModifierProperties, RoomProperties, PortalProperties, MloEntityProperties, EntitySetProperties
 from .properties.extensions import ExtensionProperties, ExtensionType, ExtensionsContainer
 from ..ydr.light_flashiness import Flashiness
+from ..cwxml.ytyp import remember_xml, unsigned
 
 
 def create_mlo_entity_set(entity_set_xml: ytypxml.EntitySet, archetype: ArchetypeProperties):
     """Create an mlo entity sets from an xml for the provided archetype data-block."""
 
     entity_set: EntitySetProperties = archetype.new_entity_set()
+    remember_xml(entity_set_xml, entity_set)
     entity_set.name = entity_set_xml.name
 
     locations = entity_set_xml.locations
@@ -36,6 +38,7 @@ def create_entity_set_entity(entity_xml: ymapxml.Entity, entity_set: EntitySetPr
     """Create an mlo entity from an xml for the provided archetype data-block."""
 
     entity: MloEntityProperties = entity_set.new_entity_set_entity()
+    remember_xml(entity_xml, entity)
     entity.position = entity_xml.position
     entity.rotation = entity_xml.rotation.inverted()
     entity.scale_xy = entity_xml.scale_xy
@@ -45,7 +48,11 @@ def create_entity_set_entity(entity_xml: ymapxml.Entity, entity_set: EntitySetPr
 
     entity.archetype_name = entity_xml.archetype_name
     entity.flags.total = str(entity_xml.flags)
-    entity.guid = entity_xml.guid
+    if current_game() == SollumzGame.RDR:
+        entity.rdr_id = str(unsigned(entity_xml.guid))
+        entity.power_grid_id = str(unsigned(entity_xml.power_grid_id, 32))
+    else:
+        entity.guid = entity_xml.guid
     entity.parent_index = entity_xml.parent_index
     entity.lod_dist = entity_xml.lod_dist
     entity.child_lod_dist = entity_xml.child_lod_dist
@@ -68,6 +75,7 @@ def create_mlo_tcm(tcm_xml: ytypxml.TimeCycleModifier, archetype: ArchetypePrope
     """Create an mlo timecycle modifier from an xml for the provided archetype data-block."""
 
     tcm: TimecycleModifierProperties = archetype.new_tcm()
+    remember_xml(tcm_xml, tcm)
     tcm.name = tcm_xml.name
     tcm.sphere = tcm_xml.sphere
     tcm.percentage = max(0.0, min(100.0, tcm_xml.percentage))
@@ -80,6 +88,10 @@ def create_mlo_portal(portal_xml: ytypxml.Portal, archetype: ArchetypeProperties
     """Create an mlo portal from an xml for the provided archetype data-block."""
 
     portal: PortalProperties = archetype.new_portal()
+    remember_xml(portal_xml, portal)
+    if current_game() == SollumzGame.RDR:
+        for prop in ('rdr_7c096c2e', 'rdr_91171666', 'rdr_96816ddf', 'rdr_0854fdee'):
+            setattr(portal, prop, getattr(portal_xml, prop))
     for index, corner in enumerate(portal_xml.corners):
         setattr(portal, f"corner{index + 1}", corner.value)
     portal.room_from_id = str(archetype.rooms[portal_xml.room_from].id)
@@ -90,13 +102,23 @@ def create_mlo_portal(portal_xml: ytypxml.Portal, archetype: ArchetypeProperties
     portal.audio_occlusion = str(
         portal_xml.audio_occlusion)
     for index in portal_xml.attached_objects:
-        archetype.entities[index].attached_portal_id = str(portal.id)
+        if index not in (-1, 0xFFFFFFFF):
+            archetype.entities[index].attached_portal_id = str(portal.id)
 
 
 def create_mlo_room(room_xml: ytypxml.Room, archetype: ArchetypeProperties):
     """Create an mlo room from an xml for the provided archetype data-block."""
 
     room: RoomProperties = archetype.new_room()
+    remember_xml(room_xml, room)
+    if current_game() == SollumzGame.RDR:
+        for probe_xml in room_xml.reflection_probes:
+            probe = room.reflection_probes.add()
+            remember_xml(probe_xml, probe)
+            for prop in ('min_extents', 'max_extents', 'rotation', 'center_offset',
+                         'influence_extents', 'probe_priority'):
+                setattr(probe, prop, getattr(probe_xml, prop))
+            probe.guid = str(unsigned(probe_xml.guid))
     room.name = room_xml.name
     room.bb_min = room_xml.bb_min
     room.bb_max = room_xml.bb_max
@@ -107,7 +129,8 @@ def create_mlo_room(room_xml: ytypxml.Room, archetype: ArchetypeProperties):
     room.floor_id = room_xml.floor_id
     room.exterior_visibility_depth = room_xml.exterior_visibility_depth
     for index in room_xml.attached_objects:
-        archetype.entities[index].attached_room_id = str(room.id)
+        if index not in (-1, 0xFFFFFFFF):
+            archetype.entities[index].attached_room_id = str(room.id)
 
 
 def find_and_link_entity_object(entity_xml: ymapxml.Entity, entity: MloEntityProperties):
@@ -148,7 +171,7 @@ def find_and_link_entity_object(entity_xml: ymapxml.Entity, entity: MloEntityPro
 def create_mlo_entity(entity_xml: ymapxml.Entity, archetype: ArchetypeProperties):
     """Create an mlo entity from an xml for the provided archetype data-block."""
 
-    entity: MloEntityProperties = archetype.new_entity()
+    entity: MloEntityProperties = archetype.new_entity(generate_rdr_id=False)
     entity.position = entity_xml.position
     entity.rotation = entity_xml.rotation.inverted()
     entity.scale_xy = entity_xml.scale_xy
@@ -158,7 +181,12 @@ def create_mlo_entity(entity_xml: ymapxml.Entity, archetype: ArchetypeProperties
 
     entity.archetype_name = entity_xml.archetype_name
     entity.flags.total = str(entity_xml.flags)
-    entity.guid = entity_xml.guid
+    remember_xml(entity_xml, entity)
+    if current_game() == SollumzGame.RDR:
+        entity.rdr_id = str(unsigned(entity_xml.guid))
+        entity.power_grid_id = str(unsigned(entity_xml.power_grid_id, 32))
+    else:
+        entity.guid = entity_xml.guid
     entity.parent_index = entity_xml.parent_index
     entity.lod_dist = entity_xml.lod_dist
     entity.child_lod_dist = entity_xml.child_lod_dist
@@ -192,11 +220,7 @@ def set_extension_props(extension_xml: ymapxml.Extension, extension: ExtensionPr
         if ignored_props is not None and prop_name in ignored_props:
             continue
 
-        # TODO: this check doesn't work as intended, `hasattr` with XML classes always returns true for some reason
-        if not hasattr(extension_xml, prop_name):
-            # Unknown prop name. Need warning
-            print(
-                f"Unknown {extension.extension_type} prop name '{prop_name}'.")
+        if extension_xml.get_element(prop_name) is None:
             continue
 
         prop_value = getattr(extension_xml, prop_name)
@@ -235,27 +259,44 @@ def create_extension(extension_xml: ymapxml.Extension, extensions_container: Ext
         return None
 
     extension = extensions_container.new_extension(extension_type)
+    remember_xml(extension_xml, extension)
     set_extension_props(extension_xml, extension)
 
-    if extension_type == ExtensionType.LIGHT_EFFECT and not extensions_container.IS_ARCHETYPE:
-        if current_game() == SollumzGame.GTA:
+    if extension_type == ExtensionType.LIGHT_EFFECT:
+        if current_game() == SollumzGame.RDR or not extensions_container.IS_ARCHETYPE:
             # Create the light objects from this light effect extension
-            obj = extensions_container.linked_object
+            obj = (extensions_container.asset if extensions_container.IS_ARCHETYPE
+                   else extensions_container.linked_object)
             armature_obj = obj if obj is not None and obj.type == "ARMATURE" else None
 
             from ..ydr.lights import create_light_instance_objs
-            lights_parent_obj = create_light_instance_objs(extension_xml.instances, armature_obj)
-            lights_parent_obj.name = f"{extensions_container.archetype_name}.light_effect"
-            if obj is not None:
+            from uuid import uuid4
+            light_group = str(uuid4()) if current_game() == SollumzGame.RDR else ""
+            if light_group:
+                extension["_rdr_light_group"] = light_group
+                extension.light_effect_properties["_rdr_light_group"] = light_group
+            lights_parent_obj = create_light_instance_objs(
+                extension_xml.instances, armature_obj,
+                parent=obj if current_game() == SollumzGame.RDR else None, light_group=light_group)
+            owner_name = (extensions_container.name if extensions_container.IS_ARCHETYPE
+                          else extensions_container.archetype_name)
+            if lights_parent_obj != obj:
+                lights_parent_obj.name = f"{owner_name}.light_effect"
+            if obj is not None and lights_parent_obj != obj:
                 # Constraint instead of parenting for a simpler hierarchy
                 # Also this way we don't need to distinguish between original lights and light effect lights.
                 # Original ones will always be the lights children of the object.
                 constraint = lights_parent_obj.constraints.new("COPY_TRANSFORMS")
                 constraint.target = obj
+            elif obj is None and current_game() == SollumzGame.RDR and not extensions_container.IS_ARCHETYPE:
+                entity = extensions_container
+                lights_parent_obj.matrix_world = (
+                    Matrix.Translation(entity.position) @ entity.rotation.to_matrix().to_4x4()
+                    @ Matrix.Diagonal((entity.scale_xy, entity.scale_xy, entity.scale_z, 1)))
 
             extension.light_effect_properties.linked_lights_object = lights_parent_obj
-        else:
-            print("Skipping light extension creation... WIP!!")
+            if current_game() == SollumzGame.RDR:
+                extension['_rdr_lights_imported'] = True
 
     return extension
 
@@ -288,7 +329,7 @@ def organize_mlo_entities_in_collections(archetype: ArchetypeProperties):
 
     base_collection_name = f"{archetype.name}.entities"
     base_collection = bpy.data.collections.new(base_collection_name)
-    bpy.context.collection.children.link(base_collection)
+    (bpy.context.collection or bpy.context.scene.collection).children.link(base_collection)
     mlo_collections = {base_collection_name: base_collection}
 
     def _link_to_collection(obj, coll):
@@ -306,7 +347,7 @@ def organize_mlo_entities_in_collections(archetype: ArchetypeProperties):
         for ext in entity.extensions:
             if ext.extension_type == ExtensionType.LIGHT_EFFECT:
                 props = ext.get_properties()
-                if props.linked_lights_object is not None:
+                if props.linked_lights_object is not None and props.linked_lights_object != entity.linked_object:
                     light_effect_objs.append(props.linked_lights_object)
 
         obj = entity.linked_object
@@ -331,7 +372,7 @@ def organize_mlo_entities_in_collections(archetype: ArchetypeProperties):
         # Place all light effect objects in their own collection
         light_effect_collection_name = f"{archetype.name}.light_effects"
         light_effect_collection = bpy.data.collections.new(light_effect_collection_name)
-        bpy.context.collection.children.link(light_effect_collection)
+        (bpy.context.collection or bpy.context.scene.collection).children.link(light_effect_collection)
         for lights_parent_obj in light_effect_objs:
             _link_to_collection_recursive(lights_parent_obj, light_effect_collection)
 
@@ -393,6 +434,9 @@ def create_archetype(archetype_xml: ytypxml.BaseArchetype, ytyp: CMapTypesProper
     """Create a ytyp archetype given an archetype cwxml and a Blender ytyp data-block."""
 
     archetype: ArchetypeProperties = ytyp.new_archetype()
+    remember_xml(archetype_xml, archetype)
+    if current_game() == SollumzGame.RDR:
+        archetype.bounds_from_asset = False
 
     archetype.name = archetype_xml.name
     archetype.flags.total = str(archetype_xml.flags)
@@ -409,11 +453,12 @@ def create_archetype(archetype_xml: ytypxml.BaseArchetype, ytyp: CMapTypesProper
     archetype.bs_radius = archetype_xml.bs_radius
     archetype.asset_name = archetype_xml.asset_name
     archetype.asset_type = get_asset_type_enum(archetype_xml.asset_type)
+    archetype.rdr_asset_type_none = archetype_xml.asset_type == '-1'
 
     if current_game() == SollumzGame.RDR:
-        archetype.load_flags = archetype_xml.load_flags
-        archetype.avoidanceflags = archetype_xml.avoidanceflags
-        archetype.guid = archetype_xml.guid
+        archetype.load_flags = str(unsigned(archetype_xml.load_flags))
+        archetype.avoidanceflags = str(unsigned(archetype_xml.avoidanceflags, 32))
+        archetype.guid = str(unsigned(archetype_xml.guid))
         archetype.unknown_1 = get_map_entity_type_enum(archetype_xml.unknown_1)
 
     find_and_set_archetype_asset(archetype)
@@ -427,6 +472,23 @@ def create_archetype(archetype_xml: ytypxml.BaseArchetype, ytyp: CMapTypesProper
         archetype.type = ArchetypeType.MLO
         archetype.mlo_flags.total = str(archetype_xml.mlo_flags)
         create_mlo_archetype_children(archetype_xml, archetype)
+        if current_game() == SollumzGame.RDR:
+            for volume_xml in archetype_xml.timecycle_volumes:
+                volume = archetype.timecycle_volumes.add()
+                remember_xml(volume_xml, volume)
+                for prop in ('name', 'center', 'orientation', 'scale', 'vol_type',
+                             'percentage', 'range', 'start_hour', 'end_hour'):
+                    setattr(volume, prop, getattr(volume_xml, prop))
+            archetype.uses_activation_volumes = archetype_xml.uses_activation_volumes
+            volumes = [(archetype.main_activation_volume, archetype_xml.main_activation_volume)]
+            volumes.extend((archetype.extra_activation_volumes.add(), xml)
+                           for xml in archetype_xml.extra_activation_volumes)
+            for volume, volume_xml in volumes:
+                remember_xml(volume_xml, volume)
+                sphere = volume_xml.bound.sphere
+                volume.center = (sphere.x, sphere.y, sphere.z)
+                volume.radius = volume_xml.bound.sphere.w
+                volume.flags = str(unsigned(volume_xml.flags, 32))
 
     for extension_xml in archetype_xml.extensions:
         create_extension(extension_xml, archetype)
@@ -436,10 +498,12 @@ def ytyp_to_obj(ytyp_xml: ytypxml.CMapTypes, game: SollumzGame):
     """Create a ytyp data-block in the Blender scene given a ytyp cwxml."""
 
     set_import_export_current_game(game)
+    bpy.context.scene['_sollumz_ytyp_geometry_tab'] = 'NONE'
 
     ytyp: CMapTypesProperties = bpy.context.scene.ytyps.add()
     ytyp.name = ytyp_xml.name
     ytyp.game = current_game()
+    remember_xml(ytyp_xml, ytyp)
 
     bpy.context.scene.ytyp_index = len(bpy.context.scene.ytyps) - 1
 
@@ -447,6 +511,6 @@ def ytyp_to_obj(ytyp_xml: ytypxml.CMapTypes, game: SollumzGame):
         create_archetype(arch_xml, ytyp)
 
 
-def import_ytyp(filepath: str, game: SollumzGame):
-    ytyp_xml = ytypxml.YTYP.from_xml_file(filepath)
-    ytyp_to_obj(ytyp_xml, game)
+def import_ytyp(filepath: str, game: SollumzGame = None):
+    ytyp_xml = ytypxml.YTYP.from_xml_file(filepath, game)
+    ytyp_to_obj(ytyp_xml, ytyp_xml.game)

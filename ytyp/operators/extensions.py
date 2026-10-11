@@ -296,3 +296,36 @@ class SOLLUMZ_OT_light_effect_create_lights_from_entity(bpy.types.Operator):
         selected_extension.get_properties().linked_lights_object = obj
 
         return {"FINISHED"}
+
+
+class SOLLUMZ_OT_light_effect_select_lights(bpy.types.Operator):
+    """Select this extension's light objects for viewport and Light Data editing"""
+    bl_idname = "sollumz.light_effect_select_lights"
+    bl_label = "Select Lights"
+    bl_options = {"UNDO"}
+    lights_object_name: bpy.props.StringProperty(options={"HIDDEN"})
+    light_group: bpy.props.StringProperty(options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return any(extension is not None and extension.extension_type == ExtensionType.LIGHT_EFFECT
+                   and extension.light_effect_properties.linked_lights_object is not None
+                   for extension in (get_selected_extension(context), get_selected_entity_extension(context)))
+
+    def execute(self, context):
+        parent = bpy.data.objects.get(self.lights_object_name)
+        if parent is None:
+            return {"CANCELLED"}
+        lights = [obj for obj in parent.children_recursive
+                  if obj.type == "LIGHT" and obj.name in context.view_layer.objects
+                  and (not self.light_group or obj.get("_rdr_light_group") == self.light_group)]
+        if not lights:
+            self.report({"WARNING"}, "No light objects in this extension")
+            return {"CANCELLED"}
+        for obj in context.view_layer.objects:
+            obj.select_set(False)
+        for obj in lights:
+            obj.hide_set(False)
+            obj.select_set(True)
+        context.view_layer.objects.active = lights[0]
+        return {"FINISHED"}

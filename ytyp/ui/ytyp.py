@@ -1,6 +1,6 @@
 import bpy
 from ...sollumz_ui import BasicListHelper, SollumzFileSettingsPanel, draw_list_with_add_remove
-from ...sollumz_properties import ArchetypeType, SOLLUMZ_UI_NAMES
+from ...sollumz_properties import ArchetypeType, SOLLUMZ_UI_NAMES, SollumzGame
 from ...sollumz_preferences import (
     get_import_settings,
     get_export_settings,
@@ -13,8 +13,29 @@ from ..utils import (
 from ...shared.multiselection import (
     MultiSelectUIListMixin,
     multiselect_ui_draw_list,
+    MultiSelectUIFlagsPanel,
 )
+from ..properties.flags import RDR_FLAG_LABELS
 from ..operators import ytyp as ytyp_ops
+
+
+class YtypFlagsPanel(MultiSelectUIFlagsPanel):
+    def draw(self, context):
+        active = self.get_flags_active(context)
+        selection = self.get_flags_selection(context)
+        self.layout.prop(selection.owner, selection.propnames.total)
+        self.layout.separator()
+        grid = self.layout.grid_flow(columns=2)
+        rdr = get_selected_ytyp(context).game == SollumzGame.RDR
+        size = active.size
+        if not rdr:
+            size = {'PortalFlags': 14, 'MloFlags': 16}.get(type(active).__name__, size)
+        labels = RDR_FLAG_LABELS.get(type(active).__name__, {}) if rdr else {}
+        for index, name in enumerate(active.get_flag_names()):
+            if index >= size:
+                break
+            label = labels.get(name, active.bl_rna.properties[name].name)
+            grid.prop(selection.owner, getattr(selection.propnames, name), text=label)
 
 
 class SOLLUMZ_UL_YTYP_LIST(BasicListHelper, bpy.types.UIList):

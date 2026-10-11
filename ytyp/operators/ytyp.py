@@ -10,7 +10,7 @@ from ...sollumz_properties import SOLLUMZ_UI_NAMES, ArchetypeType, AssetType, So
 from ...sollumz_operators import SelectTimeFlagsRangeMultiSelect, ClearTimeFlagsMultiSelect
 from ...sollumz_preferences import get_export_settings
 from ...ydr.cloth_env import cloth_env_find_mesh_objects
-from ..utils import get_selected_ytyp, get_selected_archetype
+from ..utils import get_selected_ytyp, get_selected_archetype, get_selected_room, get_selected_entity, new_rdr_guid
 from ..ytypimport import import_ytyp
 from ..ytypexport import selected_ytyp_to_xml
 from ...shared.multiselection import (
@@ -428,10 +428,7 @@ class SOLLUMZ_OT_import_ytyp(SOLLUMZ_OT_base, bpy.types.Operator, ImportHelper):
 
     def run(self, context):
         try:
-            game = SollumzGame.GTA
-            if ".rsc" in self.filepath:
-                game = SollumzGame.RDR
-            import_ytyp(self.filepath, game)
+            import_ytyp(self.filepath)
             self.message(f"Successfully imported: {self.filepath}")
             return True
         except:
@@ -491,3 +488,123 @@ class SOLLUMZ_OT_export_ytyp(SOLLUMZ_OT_base, bpy.types.Operator):
         except:
             self.error(f"Error during export: {traceback.format_exc()}")
             return False
+
+
+class RdrMloItemOperator:
+    kind: bpy.props.EnumProperty(items=[
+        ('TCV', 'Timecycle Volume', ''), ('EXTRA', 'Activation Volume', ''), ('PROBE', 'Reflection Probe', '')])
+
+    @classmethod
+    def poll(cls, context):
+        ytyp = get_selected_ytyp(context)
+        archetype = get_selected_archetype(context)
+        return (ytyp is not None and ytyp.game == SollumzGame.RDR
+                and archetype is not None and archetype.type == ArchetypeType.MLO)
+
+    def get_collection(self, context):
+        archetype = get_selected_archetype(context)
+        if self.kind == 'PROBE':
+            room = get_selected_room(context)
+            return (room, 'reflection_probes', 'reflection_probe_index') if room else (None, '', '')
+        if self.kind == 'TCV':
+            return archetype, 'timecycle_volumes', 'timecycle_volume_index'
+        return archetype, 'extra_activation_volumes', 'extra_activation_volume_index'
+
+
+class SOLLUMZ_OT_add_rdr_mlo_item(RdrMloItemOperator, bpy.types.Operator):
+    bl_idname = 'sollumz.add_rdr_mlo_item'
+    bl_label = 'Add RDR Interior Item'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        owner, collection_name, index_name = self.get_collection(context)
+        if owner is None:
+            self.report({'WARNING'}, 'Select a room first')
+            return {'CANCELLED'}
+        collection = getattr(owner, collection_name)
+        item = collection.add()
+        item.name = f'{self.kind}.{len(collection)}'
+        setattr(owner, index_name, len(collection) - 1)
+        archetype = get_selected_archetype(context)
+        archetype.edit_geometry = self.kind
+        if self.kind == 'EXTRA':
+            item.radius = 1.0
+        if self.kind == 'PROBE':
+            item.guid = new_rdr_guid()
+            item.min_extents = (-1, -1, -1)
+            item.max_extents = (1, 1, 1)
+        if context.area:
+            context.area.tag_redraw()
+        return {'FINISHED'}
+
+
+class SOLLUMZ_OT_generate_rdr_guid(bpy.types.Operator):
+    bl_idname = 'sollumz.generate_rdr_guid'
+    bl_label = 'Generate New ID'
+    bl_description = 'Assign a new unique 64-bit ID. Probe textures must be baked for the new ID'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    kind: bpy.props.EnumProperty(items=[
+        ('PROBE', 'Reflection Probe', ''), ('ENTITY', 'Entity', '')])
+
+    @classmethod
+    def poll(cls, context):
+        ytyp = get_selected_ytyp(context)
+        return ytyp is not None and ytyp.game == SollumzGame.RDR and get_selected_archetype(context) is not None
+
+    def execute(self, context):
+        if self.kind == 'ENTITY':
+            item = get_selected_entity(context)
+            prop = 'rdr_id'
+        else:
+            room = get_selected_room(context)
+            item = (room.reflection_probes[room.reflection_probe_index]
+                    if room and room.reflection_probe_index < len(room.reflection_probes) else None)
+            prop = 'guid'
+        if item is None:
+            self.report({'WARNING'}, 'Select an item first')
+            return {'CANCELLED'}
+        setattr(item, prop, new_rdr_guid())
+        return {'FINISHED'}
+
+
+class SOLLUMZ_OT_remove_rdr_mlo_item(RdrMloItemOperator, bpy.types.Operator):
+    bl_idname = 'sollumz.remove_rdr_mlo_item'
+    bl_label = 'Remove RDR Interior Item'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        owner, collection_name, index_name = self.get_collection(context)
+        if owner is None:
+            return {'CANCELLED'}
+        collection = getattr(owner, collection_name)
+        index = getattr(owner, index_name)
+        if index >= len(collection):
+            return {'CANCELLED'}
+        collection.remove(index)
+        setattr(owner, index_name, max(0, index - 1))
+        if context.area:
+            context.area.tag_redraw()
+        return {'FINISHED'}
+
+
+class SOLLUMZ_OT_archetype_calculate_bounds(bpy.types.Operator):
+    bl_idname = 'sollumz.archetype_calculate_bounds'
+    bl_label = 'Calculate Bounds from Linked Object'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        archetype = get_selected_archetype(context)
+        return archetype is not None and archetype.asset is not None
+
+    def execute(self, context):
+        from ...cwxml.ytyp import BaseArchetype
+        from ..ytypexport import set_archetype_xml_bounds_from_asset
+        archetype = get_selected_archetype(context)
+        xml = BaseArchetype()
+        set_archetype_xml_bounds_from_asset(archetype, xml)
+        for prop in ('bb_min', 'bb_max', 'bs_center', 'bs_radius'):
+            setattr(archetype, prop, getattr(xml, prop))
+        archetype.bounds_from_asset = False
+        return {'FINISHED'}

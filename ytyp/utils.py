@@ -8,7 +8,26 @@ if TYPE_CHECKING:
     from .properties.extensions import ExtensionProperties
 
 import bpy
+from uuid import uuid4
 from ..tools.utils import get_list_item
+
+
+def new_rdr_guid() -> str:
+    """Generate a unique UINT64 ID using the 0x4... pattern in native RDR entities/probes."""
+    from ..cwxml.ytyp import unsigned
+
+    used = set()
+    for scene in bpy.data.scenes:
+        for ytyp in scene.ytyps:
+            for archetype in ytyp.archetypes:
+                used.add(unsigned(archetype.guid))
+                used.update(unsigned(entity.rdr_id) for entity in archetype.entities)
+                for room in archetype.rooms:
+                    used.update(unsigned(probe.guid) for probe in room.reflection_probes)
+    while True:
+        value = int.from_bytes(uuid4().bytes_le[:8], 'little')
+        if value not in used:
+            return str(value)
 
 
 def get_selected_ytyp(context) -> Union[CMapTypesProperties, None]:

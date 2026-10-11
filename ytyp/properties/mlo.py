@@ -109,6 +109,45 @@ class MloArchetypeChild:
     mlo_archetype_uuid: bpy.props.StringProperty(name="Archetype UUID", maxlen=36)
 
 
+class ReflectionProbeProperties(bpy.types.PropertyGroup):
+    def get_guid(self):
+        return str(self.get('guid', '0'))
+
+    def set_guid(self, value):
+        from ...cwxml.ytyp import unsigned
+        self['guid'] = str(unsigned(value))
+
+    name: bpy.props.StringProperty(name="Name", default="Reflection Probe")
+    min_extents: bpy.props.FloatVectorProperty(name="Min Extents", subtype="XYZ")
+    max_extents: bpy.props.FloatVectorProperty(name="Max Extents", subtype="XYZ")
+    rotation: bpy.props.FloatVectorProperty(name="Rotation", size=4, subtype="QUATERNION", default=(1, 0, 0, 0))
+    center_offset: bpy.props.FloatVectorProperty(name="Center Offset", subtype="XYZ")
+    influence_extents: bpy.props.FloatVectorProperty(name="Influence Extents", subtype="XYZ", default=(1, 1, 1))
+    probe_priority: bpy.props.IntProperty(name="Priority", min=0, max=255)
+    guid: bpy.props.StringProperty(
+        name="GUID", get=get_guid, set=set_guid,
+        description="Unsigned 64-bit probe ID. The MLO name and this ID identify the baked probe textures")
+
+
+class TimecycleVolumeProperties(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Timecycle")
+    center: bpy.props.FloatVectorProperty(name="Center", subtype="XYZ")
+    orientation: bpy.props.FloatVectorProperty(name="Orientation", subtype="EULER")
+    scale: bpy.props.FloatVectorProperty(name="Scale", subtype="XYZ", default=(1, 1, 1))
+    vol_type: bpy.props.IntProperty(name="Volume Type", min=0)
+    percentage: bpy.props.FloatProperty(name="Percentage")
+    range: bpy.props.FloatProperty(name="Range")
+    start_hour: bpy.props.IntProperty(name="Start Hour", min=0)
+    end_hour: bpy.props.IntProperty(name="End Hour", min=0)
+
+
+class ActivationVolumeProperties(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Name", default="Activation Volume")
+    center: bpy.props.FloatVectorProperty(name="Center", subtype="XYZ")
+    radius: bpy.props.FloatProperty(name="Radius", min=0)
+    flags: bpy.props.StringProperty(name="Flags", default="0")
+
+
 class RoomProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     name: bpy.props.StringProperty(name="Name", update=MloArchetypeChild.update_mlo_archetype_caches)
     bb_min: bpy.props.FloatVectorProperty(name="Bounds Min", subtype="XYZ")
@@ -119,6 +158,8 @@ class RoomProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     flags: bpy.props.PointerProperty(type=RoomFlags, name="Flags")
     floor_id: bpy.props.IntProperty(name="Floor ID")
     exterior_visibility_depth: bpy.props.IntProperty(name="Exterior Visibility Depth", default=-1)
+    reflection_probes: bpy.props.CollectionProperty(type=ReflectionProbeProperties)
+    reflection_probe_index: bpy.props.IntProperty(min=0)
 
     # Blender usage only
     id: bpy.props.IntProperty(name="Id")
@@ -241,6 +282,10 @@ class PortalProperties(bpy.types.PropertyGroup, MloArchetypeChild):
     flags: bpy.props.PointerProperty(type=PortalFlags, name="Flags")
     mirror_priority: bpy.props.IntProperty(name="Mirror Priority")
     opacity: bpy.props.IntProperty(name="Opacity")
+    rdr_7c096c2e: bpy.props.FloatProperty(name="0x7C096C2E", default=1.0)
+    rdr_91171666: bpy.props.FloatProperty(name="0x91171666", default=1.0)
+    rdr_96816ddf: bpy.props.FloatProperty(name="0x96816DDF", default=1.0)
+    rdr_0854fdee: bpy.props.FloatProperty(name="0x0854FDEE", default=1.0)
     audio_occlusion: bpy.props.StringProperty(
         name="Audio Occlusion", update=update_audio_occlusion, default="0")
 
@@ -286,6 +331,8 @@ class TimecycleModifierProperties(bpy.types.PropertyGroup, MloArchetypeChild):
 
 
 class MloEntityProperties(bpy.types.PropertyGroup, EntityProperties, MloArchetypeChild, ExtensionsContainer):
+    rdr_id: bpy.props.StringProperty(name="ID", default="0", description="Native unsigned 64-bit entity ID")
+    power_grid_id: bpy.props.StringProperty(name="Power Grid ID", default="0")
     IS_ARCHETYPE = False
     DEFAULT_EXTENSION_TYPE = ExtensionType.DOOR
 

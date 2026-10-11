@@ -1,9 +1,12 @@
 import bpy
-from math import radians, pi, degrees
+from math import radians, pi, degrees, isclose
+from xml.etree import ElementTree as ET
+from numpy import float32
 from typing import Optional
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Vector, Quaternion
 from .light_flashiness import Flashiness
-from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, LightType
+from ..sollumz_properties import SOLLUMZ_UI_NAMES, SollumType, LightType, SollumzGame
+from ..sollumz_properties import import_export_current_game as current_game
 from ..tools.blenderhelper import create_empty_object, create_blender_object, add_child_of_bone_constraint
 from ..cwxml.drawable import Light
 from ..cwxml.ymap import LightInstance
@@ -21,9 +24,27 @@ def create_light_objs(lights: list[Light], armature_obj: Optional[bpy.types.Obje
     return lights_parent
 
 
-def create_light_instance_objs(lights: list[LightInstance], armature_obj: Optional[bpy.types.Object] = None):
-    lights = [convert_light_instance_to_light_xml(li) for li in lights]
-    return create_light_objs(lights, armature_obj)
+def create_light_instance_objs(lights: list[LightInstance], armature_obj: Optional[bpy.types.Object] = None,
+                               parent: Optional[bpy.types.Object] = None, light_group: str = ""):
+    if parent is None:
+        parent = create_empty_object(SollumType.NONE, "Lights", sollum_game_type=current_game())
+    for index, instance in enumerate(lights):
+        obj = create_light(convert_light_instance_to_light_xml(instance), armature_obj)
+        obj.parent = parent
+        if light_group:
+            obj["_rdr_light_group"] = light_group
+            if parent.users_collection:
+                for collection in tuple(obj.users_collection):
+                    collection.objects.unlink(obj)
+                for collection in parent.users_collection:
+                    collection.objects.link(obj)
+        if current_game() == SollumzGame.RDR:
+            from ..cwxml.ytyp import remember_xml
+            remember_xml(instance, obj.data)
+            obj['_rdr_light_index'] = index
+            obj['_rdr_light_rotation'] = tuple(obj.matrix_basis.to_quaternion())
+            obj.data.light_properties.rdr_bone_tag = instance.bone_id
+    return parent
 
 
 def create_light(light_xml: Light, armature_obj: Optional[bpy.types.Object] = None):
@@ -37,7 +58,7 @@ def create_light(light_xml: Light, armature_obj: Optional[bpy.types.Object] = No
     name = SOLLUMZ_UI_NAMES[light_type]
 
     light_data = create_light_data(light_type, name)
-    light_obj = create_blender_object(SollumType.LIGHT, name, light_data)
+    light_obj = create_blender_object(SollumType.LIGHT, name, light_data, sollum_game_type=current_game())
 
     if armature_obj is not None:
         create_light_bone_constraint(light_xml, light_obj, armature_obj)
@@ -76,7 +97,8 @@ def create_light_bone_constraint(light_xml: Light, light_obj: bpy.types.Object, 
     armature = armature_obj.data
 
     for bone in armature.bones:
-        if bone.bone_properties.tag != light_xml.bone_id:
+        bone_id = light_xml.bone_id & 0xFFFF if current_game() == SollumzGame.RDR else light_xml.bone_id
+        if bone.bone_properties.tag != bone_id:
             continue
 
         add_child_of_bone_constraint(light_obj, armature_obj, bone.name)
@@ -111,7 +133,12 @@ def set_light_properties(light_xml: Light, light_data: bpy.types.Light):
         light_props.cone_inner_angle = radians(light_xml.cone_inner_angle)
         light_props.cone_outer_angle = radians(light_xml.cone_outer_angle)
 
-    light_props.flashiness = Flashiness(light_xml.flashiness).name
+    if current_game() == SollumzGame.RDR and light_xml.flashiness not in Flashiness._value2member_map_:
+        light_props.rdr_flashiness = light_xml.flashiness
+        light_props.flashiness = Flashiness.CONSTANT.name
+    else:
+        light_props.rdr_flashiness = -1
+        light_props.flashiness = Flashiness(light_xml.flashiness).name
     light_props.flags = light_xml.flags
     light_props.group_id = light_xml.group_id
     light_props.time_flags = light_xml.time_flags
@@ -138,15 +165,63 @@ def create_xml_lights(parent_obj: bpy.types.Object) -> list[Light]:
     light_xmls: list[Light] = []
 
     for child in parent_obj.children_recursive:
-        if child.type == "LIGHT" and child.data.sollum_type != LightType.NONE:
+        if (child.type == "LIGHT" and child.data.sollum_type != LightType.NONE
+                and not child.get("_rdr_light_group")):
             light_xmls.append(create_light_xml(child, parent_obj))
 
     return light_xmls
 
 
-def create_xml_light_instances(parent_obj: bpy.types.Object) -> list[LightInstance]:
-    lights = create_xml_lights(parent_obj)
-    return [convert_light_to_light_instance_xml(light) for light in lights]
+def create_xml_light_instances(parent_obj: bpy.types.Object, light_group: str = "") -> list[LightInstance]:
+    # Newly imported lights and constraints need evaluated world matrices before export.
+    bpy.context.view_layer.update()
+    instances = []
+    children = list(parent_obj.children_recursive)
+    if current_game() == SollumzGame.RDR:
+        children.sort(key=lambda obj: obj.get('_rdr_light_index', len(children)))
+    for obj in children:
+        if obj.type != "LIGHT" or obj.data.sollum_type == LightType.NONE:
+            continue
+        if light_group and obj.get("_rdr_light_group") != light_group:
+            continue
+        instance = convert_light_to_light_instance_xml(create_light_xml(obj, parent_obj))
+        if current_game() == SollumzGame.RDR:
+            from ..cwxml.ytyp import restore_xml
+            restore_xml(obj.data, instance)
+            bone = set_light_xml_bone_id(instance, obj)
+            # Avoid cancelling large world translations for directly parented lights.
+            # Native bone constraints apply the bone before this local transform.
+            if obj.parent == parent_obj and (not obj.constraints or bone is not None and len(obj.constraints) == 1):
+                instance.position = [str(v) for v in obj.matrix_basis.to_translation()]
+            instance.bone_id = (bone.bone_properties.tag if bone else obj.data.light_properties.rdr_bone_tag)
+            if instance.bone_id >= 32768:
+                instance.bone_id -= 65536
+            if instance._rdr_xml:
+                source = ET.fromstring(instance._rdr_xml)
+                rotation = obj.get('_rdr_light_rotation')
+                if rotation:
+                    delta = obj.matrix_basis.to_quaternion() @ Quaternion(rotation).inverted()
+                    for prop in ('direction', 'tangent'):
+                        original = Vector(float(v) for v in source.find(prop).text.split())
+                        setattr(instance, prop, [str(v) for v in delta @ original])
+                for prop, tag in (('cone_inner_angle', 'coneInnerAngle'), ('cone_outer_angle', 'coneOuterAngle')):
+                    child = source.find(tag)
+                    if child is not None:
+                        original = float(child.get('value'))
+                        if obj.data.sollum_type != LightType.SPOT:
+                            setattr(instance, prop, original)
+                            continue
+                        angle = min(max(radians(original), 0), pi / 2)
+                        if prop == 'cone_inner_angle':
+                            expected = float(float32(abs(angle / pi - 1)))
+                            unchanged = isclose(obj.data.spot_blend, expected, abs_tol=1e-7, rel_tol=0)
+                        else:
+                            expected = float(float32(angle * 2))
+                            unchanged = isclose(obj.data.spot_size, expected, abs_tol=1e-7, rel_tol=0)
+                        if unchanged:
+                            setattr(instance, prop, original)
+        instances.append(instance)
+    return instances
 
 
 def create_light_xml(light_obj: bpy.types.Object, parent_obj: bpy.types.Object):
@@ -205,14 +280,16 @@ def set_light_xml_properties(light_xml: Light, light_data: bpy.types.Light):
     light_xml.color = light_data.color * 255
     light_xml.intensity = light_props.intensity
 
-    light_xml.flashiness = Flashiness[light_props.flashiness].value
+    light_xml.flashiness = (light_props.rdr_flashiness if current_game() == SollumzGame.RDR
+                           and light_props.rdr_flashiness >= 0 else Flashiness[light_props.flashiness].value)
     light_xml.group_id = light_props.group_id
     light_xml.falloff = light_props.falloff
     light_xml.falloff_exponent = light_props.falloff_exponent
     light_xml.culling_plane_normal = Vector(light_props.culling_plane_normal)
     light_xml.culling_plane_offset = light_props.culling_plane_offset
     light_xml.volume_intensity = light_props.volume_intensity
-    light_xml.shadow_blur = int(light_props.shadow_blur * 255)
+    light_xml.shadow_blur = (round(light_props.shadow_blur * 255) if current_game() == SollumzGame.RDR
+                             else int(light_props.shadow_blur * 255))
     light_xml.volume_size_scale = light_props.volume_size_scale
     light_xml.volume_outer_color = light_props.volume_outer_color * 255
     light_xml.light_hash = light_props.light_hash
@@ -304,9 +381,13 @@ def convert_light_to_light_instance_xml(light: Light) -> LightInstance:
         return [str(v) for v in vec]
 
     def _color_to_text_list(color):
-        return [str(int(v)) for v in color]
+        return [str(round(v) if current_game() == SollumzGame.RDR else int(v)) for v in color]
 
-    li = LightInstance()
+    if current_game() == SollumzGame.RDR:
+        from ..cwxml.ytyp import RDRYtypLightInstance
+        li = RDRYtypLightInstance()
+    else:
+        li = LightInstance()
     li.position = _vec_to_text_list(light.position)
     li.color = _color_to_text_list(light.color)
     li.flashiness = light.flashiness

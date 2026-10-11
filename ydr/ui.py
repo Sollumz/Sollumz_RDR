@@ -22,6 +22,7 @@ from ..cwxml.shader import ShaderManager
 from ..sollumz_ui import SOLLUMZ_PT_OBJECT_PANEL, SOLLUMZ_PT_MAT_PANEL
 from ..sollumz_properties import SollumType, MaterialType, LightType, SOLLUMZ_UI_NAMES, SollumzGame
 from ..sollumz_ui import FlagsPanel, TimeFlagsPanel
+from ..tools.blenderhelper import get_child_of_constraint
 from ..sollumz_helper import find_sollumz_parent
 from ..sollumz_preferences import get_addon_preferences
 from ..icons import icon_manager
@@ -346,6 +347,12 @@ class SOLLUMZ_PT_LIGHT_PANEL(bpy.types.Panel):
             box.prop(light_props, "falloff")
             box.prop(light_props, "falloff_exponent")
             box.prop(light_props, "shadow_near_clip")
+            if light.get('_rdr_xml'):
+                row = box.row()
+                row.enabled = get_child_of_constraint(aobj) is None
+                row.prop(light_props, "rdr_bone_tag")
+                if not row.enabled:
+                    box.label(text="Edit the linked bone in the Constraints tab.")
 
             # Extra Properties
             match light.sollum_type:
@@ -365,7 +372,7 @@ class SOLLUMZ_PT_LIGHT_PANEL(bpy.types.Panel):
             box.prop(light_props, "light_hash")
             # box.prop(light.light_properties, "group_id") # this property is unused
             box.prop(light_props, "projected_texture_hash")
-            box.prop(light_props, "flashiness")
+            box.prop(light_props, "rdr_flashiness" if light_props.rdr_flashiness >= 0 else "flashiness")
 
             # Volume properties
             box = layout.box()
